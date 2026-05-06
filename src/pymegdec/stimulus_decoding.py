@@ -25,6 +25,7 @@ from pymegdec.preprocessing import (
     reduce_features_pca,
 )
 from reptrace.decoding.temporal_generalization import TemporalFeatureWindow, compute_temporal_generalization_matrix  # pylint: disable=no-name-in-module
+from reptrace.decoding.time_resolved import compute_time_resolved_decoding  # pylint: disable=no-name-in-module
 from reptrace.metrics.confusion import confusion_counts, per_class_accuracy  # pylint: disable=no-name-in-module
 from reptrace.onset_detection import annotate_threshold_crossings, detect_onsets
 from reptrace.results.tables import peak_metric_rows, summarize_metric_table  # pylint: disable=no-name-in-module
@@ -49,6 +50,58 @@ SUMMARY_GROUP_FIELDS = (
     "components_pca",
     "frequency_low_hz",
     "frequency_high_hz",
+)
+TIME_RESOLVED_ROW_COLUMNS = (
+    "participant",
+    "variant",
+    "transfer_direction",
+    "window_center_s",
+    "window_start_s",
+    "window_stop_s",
+    "accuracy",
+    "percent",
+    "chance_accuracy",
+    "chance_percent",
+    "above_chance",
+    "n_train_trials",
+    "n_validation_trials",
+    "n_train_classes",
+    "n_validation_classes",
+    "n_permutations",
+    "permutation_seed",
+    "permutation_p_value",
+    "permutation_accuracy_mean",
+    "permutation_accuracy_std",
+    "null_window_center_s",
+    "null_prediction_rate",
+    "classifier",
+    "classifier_param",
+    "components_pca",
+    "actual_components_pca",
+    "pca_explained_variance_percent",
+    "frequency_low_hz",
+    "frequency_high_hz",
+)
+STIMULUS_PREDICTION_ROW_COLUMNS = (
+    "participant",
+    "variant",
+    "transfer_direction",
+    "window_center_s",
+    "window_start_s",
+    "window_stop_s",
+    "trial",
+    "validation_trial_index",
+    "validation_trial_number",
+    "true_label",
+    "predicted_label",
+    "true_stimulus",
+    "predicted_stimulus",
+    "true_stimulus_id",
+    "predicted_stimulus_id",
+    "correct",
+    "classifier",
+    "components_pca",
+    "actual_components_pca",
 )
 TEMPORAL_GENERALIZATION_SUMMARY_GROUP_FIELDS = (
     "transfer_direction",
@@ -292,31 +345,68 @@ def _evaluate_participant_time_resolved_stimulus_transfer(
     train_data = _prepare_data(train_data, config)
     validation_data = _prepare_data(validation_data, config)
     permutation_rng = np.random.default_rng(config.permutation_seed)
-    diagnostic_centers = _window_center_set(diagnostic_window_centers or ())
 
-    rows = []
-    prediction_rows = []
-    for window_center in config.window_centers:
-        include_predictions = _window_center_key(window_center) in diagnostic_centers
-        result = _evaluate_window(
-            train_data,
-            validation_data,
-            labels_train,
-            labels_validation,
-            participant,
+    train_windows = [
+        _temporal_feature_window(float(window_center), labels_train, config)
+        for window_center in config.window_centers
+    ]
+    test_windows = [
+        _temporal_feature_window(
             float(window_center),
+            labels_validation,
+            config,
+            features=_validation_features_for_window(validation_data, float(window_center), config),
+        )
+        for window_center in config.window_centers
+    ]
+
+    variant = "without_null" if np.isnan(config.null_window_center) else "with_null"
+    rows, prediction_rows = compute_time_resolved_decoding(
+        train_windows,
+        test_windows,
+        fit_model=lambda window: _train_window_model(
+            train_data,
+            labels_train,
+            float(window.center),
             classifier_param,
             config,
-            permutation_rng=permutation_rng,
-            include_predictions=include_predictions,
-        )
-        if include_predictions:
-            row, window_prediction_rows = result
-            rows.append(row)
-            prediction_rows.extend(window_prediction_rows)
-        else:
-            rows.append(result)
-    return rows, prediction_rows
+        ),
+        predict_labels=lambda model_bundle, window: _predict_window_model(model_bundle, window.features)[0],
+        chance_accuracy=1.0 / config.chance_classes,
+        metadata={
+            "participant": participant,
+            "variant": variant,
+            "transfer_direction": config.transfer_direction,
+            "classifier": config.classifier,
+            "classifier_param": classifier_param,
+            "components_pca": config.components_pca,
+            "frequency_low_hz": config.frequency_range[0],
+            "frequency_high_hz": config.frequency_range[1],
+        },
+        model_metadata=lambda model_bundle: {
+            "actual_components_pca": model_bundle.actual_components_pca,
+            "pca_explained_variance_percent": model_bundle.explained_variance_percent,
+        },
+        score_metadata=lambda model_bundle, _train_window, test_window, predictions: _time_resolved_score_metadata(
+            model_bundle,
+            test_window,
+            predictions,
+            config,
+            classifier_param,
+            permutation_rng,
+        ),
+        prediction_centers=diagnostic_window_centers or (),
+        prediction_metadata=lambda _window, trial_idx, true_label, predicted_label: _stimulus_prediction_metadata(
+            trial_idx,
+            true_label,
+            predicted_label,
+            variant,
+        ),
+    )
+    return (
+        rows[list(TIME_RESOLVED_ROW_COLUMNS)].to_dict(orient="records"),
+        prediction_rows[list(STIMULUS_PREDICTION_ROW_COLUMNS)].to_dict(orient="records") if not prediction_rows.empty else [],
+    )
 
 
 def summarize_stimulus_decoding(rows):
@@ -860,6 +950,7 @@ def _prepare_data(data, config):
 class _WindowModelBundle:
     model: object
     train_window: tuple[float, float]
+    train_features: np.ndarray
     train_labels: np.ndarray
     pca_coeff: np.ndarray | None
     train_features_mean: np.ndarray | None
@@ -893,6 +984,7 @@ def _train_window_model(train_data, labels_train, window_center, classifier_para
     return _WindowModelBundle(
         model=model,
         train_window=train_window,
+        train_features=train_features,
         train_labels=train_labels,
         pca_coeff=pca_coeff,
         train_features_mean=train_features_mean,
@@ -919,11 +1011,16 @@ def _temporal_feature_window(window_center, labels, config, *, features=None):
 
 
 def _predict_window_model(model_bundle, features):
-    if model_bundle.pca_coeff is not None:
-        features = (features - model_bundle.train_features_mean) @ model_bundle.pca_coeff[:, : model_bundle.actual_components_pca]
+    features = _transform_window_features(model_bundle, features)
     predictions = model_bundle.model.predict(features)
     scores = _prediction_scores(model_bundle.model, features)
     return predictions, scores
+
+
+def _transform_window_features(model_bundle, features):
+    if model_bundle.pca_coeff is not None:
+        return (features - model_bundle.train_features_mean) @ model_bundle.pca_coeff[:, : model_bundle.actual_components_pca]
+    return features
 
 
 def _prediction_scores(model, features):
@@ -1095,81 +1192,30 @@ def _stimulus_onset_event_row_from_reptrace(reference_row, event, detection_star
 
 
 # jscpd:ignore-end
-# pylint: disable-next=too-many-arguments,too-many-positional-arguments,too-many-locals
-def _evaluate_window(
-    train_data,
-    validation_data,
-    labels_train,
-    labels_validation,
-    participant,
-    window_center,
-    classifier_param,
-    config,
-    permutation_rng=None,
-    include_predictions=False,
-):
-    train_window = _centered_window(window_center, config.window_size)
-    null_window = _null_window(config)
-    train_stimuli_features, train_null_features = extract_windows(train_data, train_window, null_window)
-    validation_stimuli_features, _ = extract_windows(validation_data, train_window, (np.nan, np.nan))
-    train_features = np.hstack(train_stimuli_features + train_null_features).T
-    train_labels = labels_train
-    if train_null_features:
-        train_labels = np.concatenate((labels_train, np.zeros(len(train_null_features), dtype=int)))
-    validation_features = np.hstack(validation_stimuli_features).T
-
-    pca_components = _actual_pca_components(config.components_pca, train_features)
-    explained_variance = np.nan
-    if config.components_pca != float("inf"):
-        train_features, coeff, train_features_mean, explained_variance = reduce_features_pca(train_features, int(config.components_pca))
-        validation_features = (validation_features - train_features_mean) @ coeff[:, :pca_components]
-
-    model = train_multiclass_classifier(
-        train_features,
-        train_labels,
-        config.classifier,
-        classifier_param,
-        random_state=config.random_state,
-    )
-    predictions = model.predict(validation_features)
-    accuracy = float(np.mean(predictions == labels_validation))
+def _time_resolved_score_metadata(model_bundle, test_window, predictions, config, classifier_param, permutation_rng):
+    validation_features = _transform_window_features(model_bundle, test_window.features)
+    labels_validation = np.asarray(test_window.labels)
     permutation_accuracy = np.array([], dtype=float)
     permutation_p = np.nan
     if config.permutations > 0:
         permutation_accuracy = _permutation_accuracy_curve(
-            train_features,
+            model_bundle.train_features,
             validation_features,
             labels_validation,
-            train_labels,
+            model_bundle.train_labels,
             config.classifier,
             classifier_param,
             config.random_state,
             config.permutations,
             permutation_rng,
         )
+        accuracy = float(np.mean(predictions == labels_validation))
         permutation_p = float(np.mean(permutation_accuracy >= accuracy))
         if np.isfinite(permutation_p):
             permutation_p = (permutation_p * config.permutations + 1.0) / (config.permutations + 1.0)
-    chance_accuracy = 1.0 / config.chance_classes
     variant = "without_null" if np.isnan(config.null_window_center) else "with_null"
     null_prediction_rate = float(np.mean(predictions == 0)) if variant == "with_null" else np.nan
-
-    row = {
-        "participant": participant,
-        "variant": variant,
-        "transfer_direction": config.transfer_direction,
-        "window_center_s": window_center,
-        "window_start_s": train_window[0],
-        "window_stop_s": train_window[1],
-        "accuracy": accuracy,
-        "percent": 100.0 * accuracy,
-        "chance_accuracy": chance_accuracy,
-        "chance_percent": 100.0 * chance_accuracy,
-        "above_chance": accuracy > chance_accuracy,
-        "n_train_trials": len(labels_train),
-        "n_validation_trials": len(labels_validation),
-        "n_train_classes": len(np.unique(labels_train)),
-        "n_validation_classes": len(np.unique(labels_validation)),
+    return {
         "n_permutations": int(config.permutations),
         "permutation_seed": config.permutation_seed,
         "permutation_p_value": permutation_p,
@@ -1177,69 +1223,21 @@ def _evaluate_window(
         "permutation_accuracy_std": (float(np.std(permutation_accuracy, ddof=1)) if permutation_accuracy.size > 1 else np.nan),
         "null_window_center_s": config.null_window_center,
         "null_prediction_rate": null_prediction_rate,
-        "classifier": config.classifier,
-        "classifier_param": classifier_param,
-        "components_pca": config.components_pca,
-        "actual_components_pca": pca_components,
-        "pca_explained_variance_percent": explained_variance,
-        "frequency_low_hz": config.frequency_range[0],
-        "frequency_high_hz": config.frequency_range[1],
     }
 
-    if include_predictions:
-        return row, _stimulus_prediction_rows(
-            participant,
-            variant,
-            window_center,
-            train_window[0],
-            train_window[1],
-            labels_validation,
-            predictions,
-            config,
-            pca_components,
-        )
-    return row
 
-
-def _stimulus_prediction_rows(
-    participant,
-    variant,
-    window_center,
-    window_start,
-    window_stop,
-    labels_validation,
-    predictions,
-    config,
-    actual_components_pca,
-):
-    rows = []
-    for trial_idx, (true_label, predicted_label) in enumerate(zip(labels_validation, predictions)):
-        true_stimulus = _display_stimulus_label(true_label, variant)
-        predicted_stimulus = _display_stimulus_label(predicted_label, variant)
-        rows.append(
-            {
-                "participant": participant,
-                "variant": variant,
-                "transfer_direction": config.transfer_direction,
-                "window_center_s": window_center,
-                "window_start_s": window_start,
-                "window_stop_s": window_stop,
-                "trial": trial_idx,
-                "validation_trial_index": trial_idx,
-                "validation_trial_number": trial_idx + 1,
-                "true_label": int(true_label),
-                "predicted_label": int(predicted_label),
-                "true_stimulus": true_stimulus,
-                "predicted_stimulus": predicted_stimulus,
-                "true_stimulus_id": true_stimulus,
-                "predicted_stimulus_id": predicted_stimulus,
-                "correct": bool(predicted_label == true_label),
-                "classifier": config.classifier,
-                "components_pca": config.components_pca,
-                "actual_components_pca": actual_components_pca,
-            }
-        )
-    return rows
+def _stimulus_prediction_metadata(trial_idx, true_label, predicted_label, variant):
+    true_stimulus = _display_stimulus_label(true_label, variant)
+    predicted_stimulus = _display_stimulus_label(predicted_label, variant)
+    return {
+        "trial": trial_idx,
+        "validation_trial_index": trial_idx,
+        "validation_trial_number": trial_idx + 1,
+        "true_stimulus": true_stimulus,
+        "predicted_stimulus": predicted_stimulus,
+        "true_stimulus_id": true_stimulus,
+        "predicted_stimulus_id": predicted_stimulus,
+    }
 
 
 def _display_stimulus_label(label, variant):
@@ -1267,10 +1265,6 @@ def _actual_pca_components(components_pca, features):
 
 def _window_center_key(value):
     return float(np.round(float(value), 10))
-
-
-def _window_center_set(values):
-    return {_window_center_key(value) for value in values}
 
 
 def _to_float(value):
