@@ -342,7 +342,7 @@ class TestStimulusDecoding(unittest.TestCase):
                 ],
             ),
             patch(
-                "pymegdec.stimulus_decoding._permutation_accuracy_curve",
+                "reptrace.decoding.windowed.permutation_accuracy_curve",
                 return_value=np.array([0.0, 0.25, 0.5]),
             ),
         ):

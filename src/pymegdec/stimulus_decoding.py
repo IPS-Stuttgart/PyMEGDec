@@ -22,9 +22,14 @@ from pymegdec.preprocessing import (
     downsample_data,
     extract_windows,
     filter_features,
-    reduce_features_pca,
 )
 from reptrace.decoding.temporal_generalization import TemporalFeatureWindow, compute_temporal_generalization_matrix  # pylint: disable=no-name-in-module
+from reptrace.decoding.windowed import (
+    fit_window_model as fit_reptrace_window_model,
+    permutation_accuracy_curve as reptrace_permutation_accuracy_curve,
+    predict_window_model as predict_reptrace_window_model,
+    score_windowed_decoding,
+)
 from reptrace.metrics.confusion import confusion_counts, per_class_accuracy  # pylint: disable=no-name-in-module
 from reptrace.onset_detection import annotate_threshold_crossings, detect_onsets
 from reptrace.results.tables import peak_metric_rows, summarize_metric_table  # pylint: disable=no-name-in-module
@@ -855,18 +860,6 @@ def _prepare_data(data, config):
     return data
 
 
-# jscpd:ignore-start
-@dataclass(frozen=True)
-class _WindowModelBundle:
-    model: object
-    train_window: tuple[float, float]
-    train_labels: np.ndarray
-    pca_coeff: np.ndarray | None
-    train_features_mean: np.ndarray | None
-    explained_variance_percent: float
-    actual_components_pca: int
-
-
 def _train_window_model(train_data, labels_train, window_center, classifier_param, config):
     train_window = _centered_window(window_center, config.window_size)
     null_window = _null_window(config)
@@ -876,28 +869,18 @@ def _train_window_model(train_data, labels_train, window_center, classifier_para
     if train_null_features:
         train_labels = np.concatenate((labels_train, np.zeros(len(train_null_features), dtype=int)))
 
-    pca_components = _actual_pca_components(config.components_pca, train_features)
-    pca_coeff = None
-    train_features_mean = None
-    explained_variance = np.nan
-    if config.components_pca != float("inf"):
-        train_features, pca_coeff, train_features_mean, explained_variance = reduce_features_pca(train_features, int(config.components_pca))
-
-    model = train_multiclass_classifier(
+    return fit_reptrace_window_model(
         train_features,
         train_labels,
-        config.classifier,
-        classifier_param,
-        random_state=config.random_state,
-    )
-    return _WindowModelBundle(
-        model=model,
+        fit_model=lambda features, labels: train_multiclass_classifier(
+            features,
+            labels,
+            config.classifier,
+            classifier_param,
+            random_state=config.random_state,
+        ),
+        components_pca=config.components_pca,
         train_window=train_window,
-        train_labels=train_labels,
-        pca_coeff=pca_coeff,
-        train_features_mean=train_features_mean,
-        explained_variance_percent=explained_variance,
-        actual_components_pca=pca_components,
     )
 
 
@@ -919,23 +902,7 @@ def _temporal_feature_window(window_center, labels, config, *, features=None):
 
 
 def _predict_window_model(model_bundle, features):
-    if model_bundle.pca_coeff is not None:
-        features = (features - model_bundle.train_features_mean) @ model_bundle.pca_coeff[:, : model_bundle.actual_components_pca]
-    predictions = model_bundle.model.predict(features)
-    scores = _prediction_scores(model_bundle.model, features)
-    return predictions, scores
-
-
-def _prediction_scores(model, features):
-    if hasattr(model, "decision_function"):
-        scores = np.asarray(model.decision_function(features), dtype=float)
-        if scores.ndim == 1:
-            return np.abs(scores)
-        return np.max(scores, axis=1)
-    if hasattr(model, "predict_proba"):
-        scores = np.asarray(model.predict_proba(features), dtype=float)
-        return np.max(scores, axis=1)
-    return np.full(features.shape[0], np.nan, dtype=float)
+    return predict_reptrace_window_model(model_bundle, features)
 
 
 # pylint: disable-next=too-many-arguments,too-many-positional-arguments
@@ -1118,38 +1085,27 @@ def _evaluate_window(
         train_labels = np.concatenate((labels_train, np.zeros(len(train_null_features), dtype=int)))
     validation_features = np.hstack(validation_stimuli_features).T
 
-    pca_components = _actual_pca_components(config.components_pca, train_features)
-    explained_variance = np.nan
-    if config.components_pca != float("inf"):
-        train_features, coeff, train_features_mean, explained_variance = reduce_features_pca(train_features, int(config.components_pca))
-        validation_features = (validation_features - train_features_mean) @ coeff[:, :pca_components]
-
-    model = train_multiclass_classifier(
+    decoding_result = score_windowed_decoding(
         train_features,
         train_labels,
-        config.classifier,
-        classifier_param,
-        random_state=config.random_state,
-    )
-    predictions = model.predict(validation_features)
-    accuracy = float(np.mean(predictions == labels_validation))
-    permutation_accuracy = np.array([], dtype=float)
-    permutation_p = np.nan
-    if config.permutations > 0:
-        permutation_accuracy = _permutation_accuracy_curve(
-            train_features,
-            validation_features,
-            labels_validation,
-            train_labels,
+        validation_features,
+        labels_validation,
+        fit_model=lambda features, labels: train_multiclass_classifier(
+            features,
+            labels,
             config.classifier,
             classifier_param,
-            config.random_state,
-            config.permutations,
-            permutation_rng,
-        )
-        permutation_p = float(np.mean(permutation_accuracy >= accuracy))
-        if np.isfinite(permutation_p):
-            permutation_p = (permutation_p * config.permutations + 1.0) / (config.permutations + 1.0)
+            random_state=config.random_state,
+        ),
+        components_pca=config.components_pca,
+        train_window=train_window,
+        n_permutations=config.permutations,
+        permutation_rng=permutation_rng,
+    )
+    model_bundle = decoding_result.model_bundle
+    predictions = decoding_result.predictions
+    accuracy = decoding_result.accuracy
+    permutation_accuracy = decoding_result.permutation_accuracy
     chance_accuracy = 1.0 / config.chance_classes
     variant = "without_null" if np.isnan(config.null_window_center) else "with_null"
     null_prediction_rate = float(np.mean(predictions == 0)) if variant == "with_null" else np.nan
@@ -1172,7 +1128,7 @@ def _evaluate_window(
         "n_validation_classes": len(np.unique(labels_validation)),
         "n_permutations": int(config.permutations),
         "permutation_seed": config.permutation_seed,
-        "permutation_p_value": permutation_p,
+        "permutation_p_value": decoding_result.permutation_p_value,
         "permutation_accuracy_mean": (float(np.mean(permutation_accuracy)) if permutation_accuracy.size else np.nan),
         "permutation_accuracy_std": (float(np.std(permutation_accuracy, ddof=1)) if permutation_accuracy.size > 1 else np.nan),
         "null_window_center_s": config.null_window_center,
@@ -1180,8 +1136,8 @@ def _evaluate_window(
         "classifier": config.classifier,
         "classifier_param": classifier_param,
         "components_pca": config.components_pca,
-        "actual_components_pca": pca_components,
-        "pca_explained_variance_percent": explained_variance,
+        "actual_components_pca": model_bundle.actual_components_pca,
+        "pca_explained_variance_percent": model_bundle.explained_variance_percent,
         "frequency_low_hz": config.frequency_range[0],
         "frequency_high_hz": config.frequency_range[1],
     }
@@ -1196,7 +1152,7 @@ def _evaluate_window(
             labels_validation,
             predictions,
             config,
-            pca_components,
+            model_bundle.actual_components_pca,
         )
     return row
 
@@ -1259,12 +1215,6 @@ def _null_window(config):
     return _centered_window(config.null_window_center, config.window_size)
 
 
-def _actual_pca_components(components_pca, features):
-    if components_pca == float("inf"):
-        return features.shape[1]
-    return min(int(components_pca), features.shape[0], features.shape[1])
-
-
 def _window_center_key(value):
     return float(np.round(float(value), 10))
 
@@ -1291,23 +1241,21 @@ def _permutation_accuracy_curve(
     n_permutations,
     permutation_rng,
 ):
-    if permutation_rng is None:
-        permutation_rng = np.random.default_rng()
-
-    permuted_scores = []
-    for _ in range(int(n_permutations)):
-        permuted_train_labels = np.array(train_labels, copy=True)
-        permutation_rng.shuffle(permuted_train_labels)
-        model = train_multiclass_classifier(
-            train_features,
-            permuted_train_labels,
+    return reptrace_permutation_accuracy_curve(
+        train_features,
+        validation_features=validation_features,
+        validation_labels=labels_validation,
+        train_labels=train_labels,
+        fit_model=lambda features, labels: train_multiclass_classifier(
+            features,
+            labels,
             classifier,
             classifier_param,
             random_state=random_state,
-        )
-        predictions = model.predict(validation_features)
-        permuted_scores.append(float(np.mean(predictions == labels_validation)))
-    return np.asarray(permuted_scores, dtype=float)
+        ),
+        n_permutations=n_permutations,
+        permutation_rng=permutation_rng,
+    )
 
 
 def _summary_stats(values):

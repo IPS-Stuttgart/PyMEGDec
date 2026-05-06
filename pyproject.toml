@@ -15,7 +15,7 @@ dependencies = [
     "matplotlib",
     "numpy",
     "pandas>=3.0.2,<4.0.0",
-    "reptrace @ git+https://github.com/IPS-Stuttgart/RepTrace.git@main",
+    "reptrace @ git+https://github.com/IPS-Stuttgart/RepTrace.git@codex/windowed-decoding-core",
     "scikit-learn",
     "scipy",
 ]
