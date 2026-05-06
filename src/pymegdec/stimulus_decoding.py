@@ -30,9 +30,15 @@ from reptrace.decoding.windowed import (
     predict_window_model as predict_reptrace_window_model,
     score_windowed_decoding,
 )
-from reptrace.metrics.confusion import confusion_counts, per_class_accuracy  # pylint: disable=no-name-in-module
+from reptrace.metrics.confusion import (  # pylint: disable=no-name-in-module
+    confusion_counts,
+    per_class_accuracy,
+)
 from reptrace.onset_detection import annotate_threshold_crossings, detect_onsets
-from reptrace.results.tables import peak_metric_rows, summarize_metric_table  # pylint: disable=no-name-in-module
+from reptrace.results.tables import (  # pylint: disable=no-name-in-module
+    peak_metric_rows,
+    summarize_metric_table,
+)
 
 DEFAULT_DECODING_TIME_WINDOW = (-0.2, 0.6)
 DEFAULT_DECODING_STEP_S = 0.05
@@ -1011,16 +1017,8 @@ def _stimulus_onset_event_rows_from_reptrace(scan_rows, *, threshold_window, thr
         score_column="stimulus_score",
         detection_start=detection_start_s,
     )
-    reference_rows = (
-        observations.sort_values(["sequence_id", "time"])
-        .groupby("sequence_id", sort=True)
-        .first()
-        .to_dict(orient="index")
-    )
-    return [
-        _stimulus_onset_event_row_from_reptrace(reference_rows[event["sequence_id"]], event, detection_start_s)
-        for event in events.to_dict(orient="records")
-    ]
+    reference_rows = observations.sort_values(["sequence_id", "time"]).groupby("sequence_id", sort=True).first().to_dict(orient="index")
+    return [_stimulus_onset_event_row_from_reptrace(reference_rows[event["sequence_id"]], event, detection_start_s) for event in events.to_dict(orient="records")]
 
 
 def _stimulus_onset_event_row_from_reptrace(reference_row, event, detection_start_s):
