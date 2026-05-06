@@ -2287,9 +2287,9 @@ scikit-learn = "*"
 
 [package.source]
 type = "git"
-url = "https://github.com/FlorianPfaff/RepTrace.git"
-reference = "codex/time-resolved-decoding-api"
-resolved_reference = "8d605969427779d25a0cce8ab1a7b305285200e5"
+url = "https://github.com/IPS-Stuttgart/RepTrace.git"
+reference = "main"
+resolved_reference = "e746de3532a7ca0aecd55cf807f81efdce53d91b"
 
 [[package]]
 name = "requests"
@@ -2867,4 +2867,4 @@ xgboost = ["xgboost"]
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.11,<3.14"
-content-hash = "a7ed937d81e61a44bcb6715fc2ab85850a045cb62a3f026f0ab24b754088eda5"
+content-hash = "4b9b80783fa711cac7b36134e3c620b80741147a9501513e2190a3bac66aceaf"
