@@ -9,6 +9,7 @@ from pathlib import Path
 
 import matplotlib.pyplot as plt
 import numpy as np
+import pandas as pd
 import scipy.io as sio
 from pymegdec.alpha_metrics import write_alpha_metrics_csv
 from pymegdec.classifiers import (
@@ -23,6 +24,8 @@ from pymegdec.preprocessing import (
     filter_features,
     reduce_features_pca,
 )
+from reptrace.metrics.confusion import confusion_counts, per_class_accuracy
+from reptrace.results.tables import peak_metric_rows, summarize_metric_table
 
 DEFAULT_DECODING_TIME_WINDOW = (-0.2, 0.6)
 DEFAULT_DECODING_STEP_S = 0.05
@@ -275,17 +278,28 @@ def _evaluate_participant_time_resolved_stimulus_transfer(
 def summarize_stimulus_decoding(rows):
     """Summarize decoding rows across participants for each window center."""
 
+    if not rows:
+        return []
+
     group_fields = _present_group_fields(rows, SUMMARY_GROUP_FIELDS)
+    frame = _rows_frame(rows)
+    metric_summary = summarize_metric_table(
+        frame,
+        "accuracy",
+        group_fields,
+        chance_column="chance_accuracy",
+    )
     grouped = defaultdict(list)
     for row in rows:
         grouped[tuple(row.get(field, "") for field in group_fields)].append(row)
 
     summary_rows = []
-    for key, group_rows in sorted(grouped.items(), key=lambda item: item[0]):
+    for base_summary in metric_summary.to_dict("records"):
+        key = tuple(base_summary.get(field, "") for field in group_fields)
+        group_rows = grouped[key]
         accuracies = [_to_float(row["accuracy"]) for row in group_rows]
-        mean, std, sem = _summary_stats(accuracies)
-        percentages = [100.0 * value for value in accuracies if np.isfinite(value)]
-        median = float(np.median(percentages)) if percentages else np.nan
+        std = _legacy_std(base_summary["accuracy_std"], accuracies)
+        sem = _legacy_sem(base_summary["accuracy_sem"], accuracies)
         permutation_p = [_to_float(row.get("permutation_p_value")) for row in group_rows]
         n_with_permutation = sum(np.isfinite(permutation_p))
         significant_05 = sum(value < 0.05 for value in permutation_p if np.isfinite(value))
@@ -295,16 +309,16 @@ def summarize_stimulus_decoding(rows):
         summary_row.update(
             {
                 "n_participants": len(group_rows),
-                "accuracy_mean": mean,
+                "accuracy_mean": base_summary["accuracy_mean"],
                 "accuracy_std": std,
                 "accuracy_sem": sem,
-                "percent_mean": 100.0 * mean,
-                "percent_median": median,
+                "percent_mean": 100.0 * base_summary["accuracy_mean"],
+                "percent_median": 100.0 * base_summary["accuracy_median"],
                 "percent_std": 100.0 * std,
                 "percent_sem": 100.0 * sem,
                 "chance_accuracy": chance_accuracy,
                 "chance_percent": 100.0 * chance_accuracy,
-                "above_chance_count": sum(value > chance_accuracy for value in accuracies),
+                "above_chance_count": int(base_summary["accuracy_above_chance_count"]),
                 "n_with_permutation": int(n_with_permutation),
                 "n_significant_p_0.05": int(significant_05),
                 "n_significant_p_0.01": int(significant_01),
@@ -317,15 +331,14 @@ def summarize_stimulus_decoding(rows):
 def summarize_stimulus_decoding_peaks(rows):
     """Return the best decoding window per participant and variant."""
 
-    group_fields = _present_group_fields(rows, ("control", "control_label", "transfer_direction", "variant", "participant"))
-    grouped = defaultdict(list)
-    for row in rows:
-        grouped[tuple(row.get(field, "") for field in group_fields)].append(row)
+    if not rows:
+        return []
 
+    group_fields = _present_group_fields(rows, ("control", "control_label", "transfer_direction", "variant", "participant"))
+    peaks = peak_metric_rows(_rows_frame(rows), "accuracy", group_fields, time_column="window_center_s", prefer_time=0.0)
     peak_rows = []
-    for key, group_rows in sorted(grouped.items(), key=lambda item: item[0]):
-        peak = max(group_rows, key=lambda row: (_to_float(row["accuracy"]), -abs(_to_float(row["window_center_s"]))))
-        peak_row = dict(zip(group_fields, key))
+    for peak in peaks.to_dict("records"):
+        peak_row = {field: peak.get(field, "") for field in group_fields}
         peak_row.update(
             {
                 "peak_window_center_s": peak["window_center_s"],
@@ -344,44 +357,48 @@ def summarize_stimulus_decoding_peaks(rows):
 def summarize_stimulus_prediction_diagnostics(prediction_rows):
     """Summarize trial-level prediction diagnostics."""
 
+    if not prediction_rows:
+        return [], []
+
     group_fields = _present_group_fields(prediction_rows, ("control", "control_label", "transfer_direction", "variant", "window_center_s"))
-    confusion: dict[tuple[object, ...], int] = defaultdict(int)
-    per_stimulus_trials: dict[tuple[object, ...], int] = defaultdict(int)
-    per_stimulus_correct: dict[tuple[object, ...], int] = defaultdict(int)
-    per_stimulus_participants: dict[tuple[object, ...], set[object]] = defaultdict(set)
-    for row in prediction_rows:
-        base_key = tuple(row.get(field, "") for field in group_fields)
-        confusion[base_key + (row["true_stimulus"], row["predicted_stimulus"])] += 1
-        per_stimulus_key = base_key + (row["true_stimulus"],)
-        per_stimulus_trials[per_stimulus_key] += 1
-        per_stimulus_correct[per_stimulus_key] += int(bool(row["correct"]))
-        per_stimulus_participants[per_stimulus_key].add(row["participant"])
+    frame = _rows_frame(prediction_rows)
+    participant_column = "participant" if "participant" in frame.columns else None
 
     confusion_rows = []
-    for key, count in sorted(confusion.items()):
-        true_stimulus, predicted_stimulus = key[-2:]
-        row = dict(zip(group_fields, key[:-2]))
+    confusion_summary = confusion_counts(
+        frame,
+        true_column="true_stimulus",
+        predicted_column="predicted_stimulus",
+        group_columns=group_fields,
+    )
+    for summary in confusion_summary.to_dict("records"):
+        row = {field: summary.get(field, "") for field in group_fields}
         row.update(
             {
-                "true_stimulus": true_stimulus,
-                "predicted_stimulus": predicted_stimulus,
-                "count": count,
+                "true_stimulus": summary["true_label"],
+                "predicted_stimulus": summary["predicted_label"],
+                "count": summary["count"],
             }
         )
         confusion_rows.append(row)
+
     per_stimulus_rows = []
-    for key in sorted(per_stimulus_trials):
-        true_stimulus = key[-1]
-        n_trials = per_stimulus_trials[key]
-        n_correct = per_stimulus_correct[key]
-        accuracy = n_correct / n_trials if n_trials else np.nan
-        row = dict(zip(group_fields, key[:-1]))
+    per_stimulus_summary = per_class_accuracy(
+        frame,
+        true_column="true_stimulus",
+        predicted_column="predicted_stimulus",
+        participant_column=participant_column,
+        group_columns=group_fields,
+    )
+    for summary in per_stimulus_summary.to_dict("records"):
+        accuracy = summary["accuracy"]
+        row = {field: summary.get(field, "") for field in group_fields}
         row.update(
             {
-                "true_stimulus": true_stimulus,
-                "n_participants": len(per_stimulus_participants[key]),
-                "n_trials": n_trials,
-                "n_correct": n_correct,
+                "true_stimulus": summary["true_label"],
+                "n_participants": summary.get("n_participants", np.nan),
+                "n_trials": summary["n_trials"],
+                "n_correct": summary["n_correct"],
                 "accuracy": accuracy,
                 "percent": 100.0 * accuracy,
             }
@@ -394,33 +411,44 @@ def summarize_stimulus_prediction_diagnostics(prediction_rows):
 def summarize_stimulus_temporal_generalization(rows):
     """Summarize temporal-generalization rows across participants."""
 
+    if not rows:
+        return []
+
     group_fields = _present_group_fields(rows, TEMPORAL_GENERALIZATION_SUMMARY_GROUP_FIELDS)
+    frame = _rows_frame(rows)
+    metric_summary = summarize_metric_table(
+        frame,
+        "accuracy",
+        group_fields,
+        chance_column="chance_accuracy",
+    )
     grouped = defaultdict(list)
     for row in rows:
         grouped[tuple(row.get(field, "") for field in group_fields)].append(row)
 
     summary_rows = []
-    for key, group_rows in sorted(grouped.items(), key=lambda item: item[0]):
+    for base_summary in metric_summary.to_dict("records"):
+        key = tuple(base_summary.get(field, "") for field in group_fields)
+        group_rows = grouped[key]
         accuracies = [_to_float(row["accuracy"]) for row in group_rows]
-        mean, std, sem = _summary_stats(accuracies)
-        percentages = [100.0 * value for value in accuracies if np.isfinite(value)]
-        median = float(np.median(percentages)) if percentages else np.nan
+        std = _legacy_std(base_summary["accuracy_std"], accuracies)
+        sem = _legacy_sem(base_summary["accuracy_sem"], accuracies)
         chance_accuracy = _to_float(group_rows[0]["chance_accuracy"])
         diagonal_values = {_window_center_key(row["train_window_center_s"]) == _window_center_key(row["test_window_center_s"]) for row in group_rows}
         summary_row = dict(zip(group_fields, key))
         summary_row.update(
             {
                 "n_participants": len(group_rows),
-                "accuracy_mean": mean,
+                "accuracy_mean": base_summary["accuracy_mean"],
                 "accuracy_std": std,
                 "accuracy_sem": sem,
-                "percent_mean": 100.0 * mean,
-                "percent_median": median,
+                "percent_mean": 100.0 * base_summary["accuracy_mean"],
+                "percent_median": 100.0 * base_summary["accuracy_median"],
                 "percent_std": 100.0 * std,
                 "percent_sem": 100.0 * sem,
                 "chance_accuracy": chance_accuracy,
                 "chance_percent": 100.0 * chance_accuracy,
-                "above_chance_count": sum(value > chance_accuracy for value in accuracies),
+                "above_chance_count": int(base_summary["accuracy_above_chance_count"]),
                 "is_diagonal": bool(diagonal_values == {True}),
             }
         )
@@ -1243,6 +1271,26 @@ def _summary_stats(values):
         return np.nan, np.nan, np.nan
     std = float(np.std(values, ddof=1)) if values.size > 1 else 0.0
     return float(np.mean(values)), std, float(std / np.sqrt(values.size))
+
+
+def _rows_frame(rows):
+    return pd.DataFrame(list(rows))
+
+
+def _legacy_std(summary_value, values):
+    finite_values = np.asarray(list(values), dtype=float)
+    finite_values = finite_values[np.isfinite(finite_values)]
+    if finite_values.size == 1:
+        return 0.0
+    return _to_float(summary_value)
+
+
+def _legacy_sem(summary_value, values):
+    finite_values = np.asarray(list(values), dtype=float)
+    finite_values = finite_values[np.isfinite(finite_values)]
+    if finite_values.size == 1:
+        return 0.0
+    return _to_float(summary_value)
 
 
 def _present_group_fields(rows, fields):

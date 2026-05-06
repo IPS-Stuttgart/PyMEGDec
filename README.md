@@ -2,6 +2,9 @@
 
 Utilities for MEG decoding experiments, including model transfer between experiment
 conditions and cross-validation on a single dataset.
+Reusable decoding summaries and prediction-table diagnostics are provided by
+RepTrace; PyMEGDec keeps the MEG-specific loading, preprocessing, and workflow
+entry points.
 
 ## Repository layout
 
@@ -33,13 +36,14 @@ analysis command for alpha metrics and behavioral reaction times.
 
 ```bash
 python -m pip install --upgrade pip
-python -m pip install -e .
+python -m pip install poetry
+poetry install
 ```
 
 Install optional classifier backends when needed:
 
 ```bash
-python -m pip install -e ".[all]"
+poetry install --extras "all"
 ```
 
 ## Data directory

@@ -57,7 +57,7 @@ def get_channel_names(data, n_channels=None):
 
     labels = np.asarray(get_data_field(data, "label"), dtype=object).ravel()
     if n_channels is not None:
-        labels = labels[:n_channels]
+        labels = labels[:n_channels].ravel()
     return [_label_to_string(label) for label in labels]
 
 
@@ -66,10 +66,10 @@ def get_channel_positions(data, n_channels=None):
 
     grad = get_data_field(data, "grad")
     chanpos = _unwrap_singleton(_get_struct_field(grad, "chanpos"))
-    positions = np.asarray(chanpos, dtype=float)
-    if n_channels is not None:
-        positions = positions[:n_channels]
-    return positions
+    positions: np.ndarray = np.asarray(chanpos, dtype=float)
+    if n_channels is None:
+        return positions
+    return positions[:n_channels]
 
 
 def select_channels(data, location_pattern=DEFAULT_OCCIPITAL_PATTERN):
