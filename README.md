@@ -2,6 +2,9 @@
 
 Utilities for MEG decoding experiments, including model transfer between experiment
 conditions and cross-validation on a single dataset.
+Reusable decoding summaries and prediction-table diagnostics are provided by
+RepTrace; PyMEGDec keeps the MEG-specific loading, preprocessing, and workflow
+entry points.
 
 ## Repository layout
 

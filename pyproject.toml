@@ -10,12 +10,14 @@ authors = [
     { name = "Florian Pfaff", email = "pfaff@ias.uni-stuttgart.de" },
 ]
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.11,<3.14"
 dependencies = [
     "matplotlib",
     "numpy",
     "scikit-learn",
     "scipy",
+    "reptrace @ git+https://github.com/FlorianPfaff/RepTrace.git@main",
+    "pandas (>=3.0.2,<4.0.0)",
 ]
 
 [project.optional-dependencies]
