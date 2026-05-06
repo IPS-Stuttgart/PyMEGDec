@@ -1,6 +1,6 @@
 [build-system]
-requires = ["setuptools>=69", "wheel"]
-build-backend = "setuptools.build_meta"
+requires = ["poetry-core>=2.0.0,<3.0.0"]
+build-backend = "poetry.core.masonry.api"
 
 [project]
 name = "pymegdec"
@@ -14,10 +14,10 @@ requires-python = ">=3.11,<3.14"
 dependencies = [
     "matplotlib",
     "numpy",
+    "pandas>=3.0.2,<4.0.0",
+    "reptrace @ git+https://github.com/FlorianPfaff/RepTrace.git@main",
     "scikit-learn",
     "scipy",
-    "reptrace @ git+https://github.com/FlorianPfaff/RepTrace.git@main",
-    "pandas (>=3.0.2,<4.0.0)",
 ]
 
 [project.optional-dependencies]
@@ -53,8 +53,8 @@ pymegdec-transfer = "pymegdec.cli:transfer"
 pymegdec-stimulus-decoding = "pymegdec.cli:stimulus_decoding"
 pymegdec-alpha-movement-results = "pymegdec.cli:alpha_movement_results"
 
-[tool.setuptools.packages.find]
-where = ["src"]
+[tool.poetry]
+packages = [{ include = "pymegdec", from = "src" }]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
