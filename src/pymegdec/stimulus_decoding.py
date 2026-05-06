@@ -24,8 +24,9 @@ from pymegdec.preprocessing import (
     filter_features,
     reduce_features_pca,
 )
-from reptrace.metrics.confusion import confusion_counts, per_class_accuracy
-from reptrace.results.tables import peak_metric_rows, summarize_metric_table
+from reptrace.metrics.confusion import confusion_counts, per_class_accuracy  # pylint: disable=no-name-in-module
+from reptrace.onset_detection import annotate_threshold_crossings, detect_onsets
+from reptrace.results.tables import peak_metric_rows, summarize_metric_table  # pylint: disable=no-name-in-module
 
 DEFAULT_DECODING_TIME_WINDOW = (-0.2, 0.6)
 DEFAULT_DECODING_STEP_S = 0.05
@@ -613,9 +614,17 @@ def evaluate_participant_stimulus_onset_scan(
             )
         )
 
-    threshold = _score_threshold_from_window(scan_rows, threshold_window, threshold_quantile)
-    _annotate_scan_threshold(scan_rows, threshold)
-    event_rows = _stimulus_onset_event_rows(scan_rows, detection_start_s=detection_start_s)
+    scan_rows = _annotate_stimulus_onset_scan_with_reptrace(
+        scan_rows,
+        threshold_window=threshold_window,
+        threshold_quantile=threshold_quantile,
+    )
+    event_rows = _stimulus_onset_event_rows_from_reptrace(
+        scan_rows,
+        threshold_window=threshold_window,
+        threshold_quantile=threshold_quantile,
+        detection_start_s=detection_start_s,
+    )
     return scan_rows, event_rows
 
 
@@ -973,45 +982,64 @@ def _stimulus_onset_scan_rows(
     return rows
 
 
-def _score_threshold_from_window(rows, threshold_window, threshold_quantile):
-    threshold_scores = [_to_float(row["stimulus_score"]) for row in rows if threshold_window[0] <= _to_float(row["scan_window_center_s"]) <= threshold_window[1]]
-    threshold_scores = [score for score in threshold_scores if np.isfinite(score)]
-    if not threshold_scores:
-        return np.nan
-    return float(np.quantile(threshold_scores, threshold_quantile))
+def _stimulus_score_observation_frame(scan_rows):
+    frame = pd.DataFrame(scan_rows)
+    if frame.empty:
+        return frame
+    frame = frame.copy()
+    frame["sequence_id"] = frame["validation_trial_index"]
+    frame["time"] = frame["scan_window_center_s"]
+    frame["window_start"] = frame["scan_window_start_s"]
+    frame["window_stop"] = frame["scan_window_stop_s"]
+    frame["true_class"] = frame["true_stimulus_id"]
+    frame["predicted_class"] = frame["predicted_stimulus_id"]
+    frame["is_correct"] = frame["correct"].astype(bool)
+    return frame
 
 
-def _annotate_scan_threshold(rows, threshold):
-    for row in rows:
-        row["score_threshold"] = threshold
-        row["above_threshold"] = bool(np.isfinite(threshold) and _to_float(row["stimulus_score"]) >= threshold)
+def _annotate_stimulus_onset_scan_with_reptrace(scan_rows, *, threshold_window, threshold_quantile):
+    if not scan_rows:
+        return []
+
+    original_columns = list(pd.DataFrame(scan_rows).columns)
+    observations = _stimulus_score_observation_frame(scan_rows)
+    thresholded = annotate_threshold_crossings(
+        observations,
+        threshold_window=threshold_window,
+        threshold_quantile=threshold_quantile,
+        score_column="stimulus_score",
+    )
+    thresholded["threshold_window_start_s"] = thresholded["threshold_window_start"]
+    thresholded["threshold_window_stop_s"] = thresholded["threshold_window_stop"]
+    return thresholded[original_columns].to_dict(orient="records")
 
 
-def _stimulus_onset_event_rows(scan_rows, *, detection_start_s=None):
-    rows_by_trial = defaultdict(list)
-    for row in scan_rows:
-        rows_by_trial[row["validation_trial_index"]].append(row)
+def _stimulus_onset_event_rows_from_reptrace(scan_rows, *, threshold_window, threshold_quantile, detection_start_s=None):
+    if not scan_rows:
+        return []
 
-    event_rows = []
-    for _trial_idx, trial_rows in sorted(rows_by_trial.items()):
-        trial_rows = sorted(trial_rows, key=lambda row: _to_float(row["scan_window_center_s"]))
-        candidates = trial_rows
-        if detection_start_s is not None:
-            candidates = [row for row in trial_rows if _to_float(row["scan_window_center_s"]) >= detection_start_s]
-        detected_rows = [row for row in candidates if bool(row["above_threshold"])]
-        detection_row = detected_rows[0] if detected_rows else None
-        reference_row = trial_rows[0]
-        event_rows.append(_stimulus_onset_event_row(reference_row, detection_row, len(trial_rows), detection_start_s))
-    return event_rows
+    observations = _stimulus_score_observation_frame(scan_rows)
+    events = detect_onsets(
+        observations,
+        threshold_window=threshold_window,
+        threshold_quantile=threshold_quantile,
+        score_column="stimulus_score",
+        detection_start=detection_start_s,
+    )
+    reference_rows = (
+        observations.sort_values(["sequence_id", "time"])
+        .groupby("sequence_id", sort=True)
+        .first()
+        .to_dict(orient="index")
+    )
+    return [
+        _stimulus_onset_event_row_from_reptrace(reference_rows[event["sequence_id"]], event, detection_start_s)
+        for event in events.to_dict(orient="records")
+    ]
 
 
-def _stimulus_onset_event_row(reference_row, detection_row, n_scanned_windows, detection_start_s):
-    detected = detection_row is not None
-    detection_center = _to_float(detection_row["scan_window_center_s"]) if detected else np.nan
-    predicted_label = detection_row["predicted_label"] if detected else np.nan
-    predicted_stimulus = detection_row["predicted_stimulus_id"] if detected else np.nan
-    score = detection_row["stimulus_score"] if detected else np.nan
-    correct_detected_stimulus = bool(detection_row["correct"]) if detected else False
+def _stimulus_onset_event_row_from_reptrace(reference_row, event, detection_start_s):
+    detected = bool(event["detected"])
     return {
         "participant": reference_row["participant"],
         "variant": reference_row["variant"],
@@ -1025,21 +1053,21 @@ def _stimulus_onset_event_row(reference_row, detection_row, n_scanned_windows, d
         "true_stimulus": reference_row["true_stimulus"],
         "true_stimulus_id": reference_row["true_stimulus_id"],
         "detected": detected,
-        "detection_window_center_s": detection_center,
-        "detection_window_start_s": detection_row["scan_window_start_s"] if detected else np.nan,
-        "detection_window_stop_s": detection_row["scan_window_stop_s"] if detected else np.nan,
-        "detection_latency_s": detection_center,
-        "detected_before_stimulus": bool(detected and detection_center < 0.0),
-        "predicted_label_at_detection": predicted_label,
-        "predicted_stimulus_id_at_detection": predicted_stimulus,
-        "correct_detected_stimulus": correct_detected_stimulus,
-        "stimulus_score_at_detection": score,
-        "score_threshold": reference_row["score_threshold"],
-        "threshold_quantile": reference_row["threshold_quantile"],
-        "threshold_window_start_s": reference_row["threshold_window_start_s"],
-        "threshold_window_stop_s": reference_row["threshold_window_stop_s"],
+        "detection_window_center_s": event["detection_time"],
+        "detection_window_start_s": event["detection_window_start"],
+        "detection_window_stop_s": event["detection_window_stop"],
+        "detection_latency_s": event["detection_latency"],
+        "detected_before_stimulus": bool(event["detected_before_zero"]),
+        "predicted_label_at_detection": event["predicted_label_at_detection"] if detected else np.nan,
+        "predicted_stimulus_id_at_detection": event["predicted_class_at_detection"] if detected else np.nan,
+        "correct_detected_stimulus": bool(event["is_correct_at_detection"]) if detected else False,
+        "stimulus_score_at_detection": event["score_at_detection"],
+        "score_threshold": event["score_threshold"],
+        "threshold_quantile": event["threshold_quantile"],
+        "threshold_window_start_s": event["threshold_window_start"],
+        "threshold_window_stop_s": event["threshold_window_stop"],
         "detection_start_s": detection_start_s if detection_start_s is not None else np.nan,
-        "n_scanned_windows": n_scanned_windows,
+        "n_scanned_windows": event["n_time_points"],
         "classifier": reference_row["classifier"],
         "components_pca": reference_row["components_pca"],
         "actual_components_pca": reference_row["actual_components_pca"],

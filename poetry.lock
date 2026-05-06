@@ -2289,7 +2289,7 @@ scikit-learn = "*"
 type = "git"
 url = "https://github.com/FlorianPfaff/RepTrace.git"
 reference = "main"
-resolved_reference = "5a888650cfe2a5d7e08c51b3d7839f2f393111a4"
+resolved_reference = "b9eeccb5ba2480a9d63a503d3e69e6de0b66a340"
 
 [[package]]
 name = "requests"
