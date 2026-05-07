@@ -6,6 +6,19 @@ Reusable decoding summaries and prediction-table diagnostics are provided by
 RepTrace; PyMEGDec keeps the MEG-specific loading, preprocessing, and workflow
 entry points.
 
+## Project boundary with RepTrace
+
+PyMEGDec owns the dataset-specific MEG analysis layer. Keep MATLAB `.mat`
+loading, `Part*Data.mat` / `Part*CueData.mat` participant-file conventions, CTF
+sensor geometry handling, alpha analyses, stimulus-specific defaults, and
+paper-facing scripts in this repository.
+
+RepTrace owns the reusable M/EEG decoding layer. Feature-matrix decoding,
+classifier calibration, temporal generalization, onset/state inference,
+confusion and per-class metrics, MNE `Epochs` decoding, and generic
+summary-table/reporting helpers should live in RepTrace and be imported here
+rather than duplicated.
+
 ## Repository layout
 
 ```text
@@ -17,7 +30,7 @@ src/pymegdec/              Package source code
   reaction_time_analysis.py Alpha/RT join and association summaries
   stimulus_decoding.py     Time-resolved train-main / validate-cue decoding
   classifiers.py           Classifier factories and PyTorch Lightning model
-  preprocessing.py         Filtering, downsampling, window extraction, PCA
+  preprocessing.py         Filtering, downsampling, window extraction
   model_transfer.py        Train-on-experiment / validate-on-cue evaluation
   cross_validation.py      Single-dataset cross-validation routine
 tests/                     Unit and data-dependent unittest suites
