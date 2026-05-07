@@ -1,0 +1,22 @@
+site_name: PyMEGDec
+site_description: MEG decoding utilities for model-transfer, stimulus-decoding, alpha, and reaction-time analyses.
+repo_url: https://github.com/IPS-Stuttgart/PyMEGDec
+repo_name: IPS-Stuttgart/PyMEGDec
+
+theme:
+  name: readthedocs
+
+nav:
+  - Overview: index.md
+  - Getting started: getting-started.md
+  - Data configuration: data.md
+  - CLI reference: cli.md
+  - Stimulus decoding: stimulus-decoding.md
+  - Alpha analyses: alpha.md
+  - Python API: api.md
+  - Development: development.md
+
+markdown_extensions:
+  - admonition
+  - toc:
+      permalink: true
