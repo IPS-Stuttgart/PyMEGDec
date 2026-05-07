@@ -24,7 +24,6 @@ from pymegdec.preprocessing import (  # noqa: E402
     extract_windows,
     filter_features,
     preprocess_features,
-    reduce_features_pca,
 )
 
 __all__ = [
@@ -36,7 +35,6 @@ __all__ = [
     "get_default_classifier_param",
     "get_original_feature_importance",
     "preprocess_features",
-    "reduce_features_pca",
     "train_multiclass_classifier",
 ]
 

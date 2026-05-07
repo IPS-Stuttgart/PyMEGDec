@@ -3,7 +3,6 @@
 import numpy as np
 from scipy.interpolate import interp1d
 from scipy.signal import butter, detrend, filtfilt
-from sklearn.decomposition import PCA
 
 
 def preprocess_features(
@@ -95,18 +94,3 @@ def extract_windows(data, train_window, null_time_window):
         raise ValueError("Invalid null window")
 
     return stimuli_features_cell, null_features_cell
-
-
-def reduce_features_pca(features, n_components):
-    n_components = min(n_components, features.shape[0], features.shape[1])
-    pca = PCA(n_components=n_components)
-    features_train_exp_mean = np.mean(features, axis=0)
-    features_centered = features - features_train_exp_mean
-    reduced_features = pca.fit_transform(features_centered)
-    explained_variance = np.sum(pca.explained_variance_ratio_) * 100
-    return (
-        reduced_features,
-        pca.components_.T,
-        features_train_exp_mean,
-        explained_variance,
-    )
