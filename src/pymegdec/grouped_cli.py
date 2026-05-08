@@ -6,7 +6,9 @@ import argparse
 import sys
 from collections.abc import Callable, Sequence
 
-from pymegdec import alpha_cli, cli as legacy_cli, stimulus_cli
+from pymegdec import alpha_cli
+from pymegdec import cli as legacy_cli
+from pymegdec import stimulus_cli
 from pymegdec.data_download import download_meg_data_files
 from pymegdec.synthetic_data_cli import make_synthetic_data
 

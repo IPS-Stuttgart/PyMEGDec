@@ -13,7 +13,11 @@ from pymegdec.alpha_movement import (
     AlphaMovementConfig,
     export_alpha_movement,
 )
-from pymegdec.cli import add_alpha_metric_arguments, alpha_metric_config_from_args, parse_range
+from pymegdec.cli import (
+    add_alpha_metric_arguments,
+    alpha_metric_config_from_args,
+    parse_range,
+)
 from pymegdec.reaction_time_analysis import (
     DEFAULT_ALPHA_RT_METRICS,
     AlphaReactionTimeExportConfig,
@@ -64,10 +68,7 @@ def alpha_metrics(argv: Sequence[str] | None = None, prog: str | None = None) ->
 def _build_alpha_movement_parser(prog: str | None = None) -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog=prog,
-        description=(
-            "Export sensor-level alpha movement trajectories. The trajectory is "
-            "a MEG sensor-array proxy, not source-localized brain movement."
-        ),
+        description=("Export sensor-level alpha movement trajectories. The trajectory is " "a MEG sensor-array proxy, not source-localized brain movement."),
     )
     parser.add_argument("--data-dir", default=None, help="Directory containing Part*Data.mat files.")
     parser.add_argument(

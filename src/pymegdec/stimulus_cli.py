@@ -15,7 +15,10 @@ from pymegdec.cli import (
     parse_int_or_inf,
 )
 from pymegdec.data_config import resolve_data_folder
-from pymegdec.reaction_time_analysis import available_participants, parse_participant_spec
+from pymegdec.reaction_time_analysis import (
+    available_participants,
+    parse_participant_spec,
+)
 from pymegdec.stimulus_decoding import (
     DEFAULT_ONSET_SCAN_STEP_S,
     DEFAULT_ONSET_SCAN_TIME_WINDOW,
@@ -31,7 +34,10 @@ from pymegdec.stimulus_decoding import (
     summarize_stimulus_prediction_diagnostics,
     window_centers_from_range,
 )
-from reptrace.decoding.robustness import RobustnessCondition, run_participant_robustness_conditions
+from reptrace.decoding.robustness import (
+    RobustnessCondition,
+    run_participant_robustness_conditions,
+)
 
 DEFAULT_PREDICTION_WINDOW_CENTERS = (-0.175, 0.175)
 DEFAULT_ROBUSTNESS_PARTICIPANTS = "1-4,6,8,9,10,13-27"
@@ -238,7 +244,9 @@ def _build_onset_scan_parser(prog: str | None = None) -> argparse.ArgumentParser
     parser.add_argument("--train-window-center", type=float, default=DEFAULT_ONSET_SCAN_TRAIN_WINDOW_CENTER, help="Known-onset training window center in seconds.")
     parser.add_argument("--scan-time-window", type=_parse_time_window, default=DEFAULT_ONSET_SCAN_TIME_WINDOW, help="Validation scan center range as start,stop in seconds.")
     parser.add_argument("--window-step-s", type=float, default=DEFAULT_ONSET_SCAN_STEP_S, help="Step between scan window centers in seconds.")
-    parser.add_argument("--threshold-window", type=_parse_time_window, default=DEFAULT_ONSET_THRESHOLD_WINDOW, help="Window-center range used to estimate the confidence threshold.")
+    parser.add_argument(
+        "--threshold-window", type=_parse_time_window, default=DEFAULT_ONSET_THRESHOLD_WINDOW, help="Window-center range used to estimate the confidence threshold."
+    )
     parser.add_argument("--threshold-quantile", type=float, default=DEFAULT_ONSET_THRESHOLD_QUANTILE, help="Quantile of threshold-window scores used as detection threshold.")
     parser.add_argument("--detection-start-s", type=parse_float_or_inf, default=None, help="Optional earliest scan center considered for first detection.")
     _add_model_args(parser, include_transfer_direction=True)
