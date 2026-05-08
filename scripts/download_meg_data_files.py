@@ -1,109 +1,21 @@
 #!/usr/bin/env python3
+"""Backward-compatible wrapper for the grouped MEG data download command."""
+
 from __future__ import annotations
 
-import argparse
-import os
-import re
-import shutil
-import urllib.parse
-import urllib.request
+import sys
 from pathlib import Path
 
-_ALLOWED_URL_SCHEMES = {"https"}
+_ROOT = Path(__file__).resolve().parents[1]
+_SRC = _ROOT / "src"
+if _SRC.exists():
+    sys.path.insert(0, str(_SRC))
 
-
-class _HTTPSOnlyRedirectHandler(urllib.request.HTTPRedirectHandler):
-    """Redirect handler that preserves the HTTPS-only download invariant."""
-
-    def redirect_request(self, req, fp, code, msg, headers, newurl):  # noqa: ANN001, ANN201
-        redirect_url = urllib.parse.urljoin(req.full_url, newurl)
-        _validate_https_url(redirect_url, description="redirect")
-        return super().redirect_request(req, fp, code, msg, headers, redirect_url)
-
-
-_DOWNLOAD_OPENER = urllib.request.build_opener(_HTTPSOnlyRedirectHandler)
-
-
-def _validate_https_url(url: str, *, description: str) -> str:
-    parsed = urllib.parse.urlparse(url)
-    if parsed.scheme.lower() not in _ALLOWED_URL_SCHEMES or not parsed.netloc:
-        raise ValueError(f"Only absolute HTTPS {description} URLs are supported: {url!r}")
-    return url
-
-
-def _urls_from_env(name: str) -> list[str]:
-    raw = os.environ.get(name, "")
-    return [token.strip() for token in re.split(r"[\s,]+", raw) if token.strip()]
-
-
-def _direct_url(url: str) -> str:
-    parsed = urllib.parse.urlparse(_validate_https_url(url, description="source"))
-
-    if parsed.path.rstrip("/").endswith("/download"):
-        direct_url = url
-    elif "/s/" in f"/{parsed.path.strip('/')}/":
-        direct_url = url.rstrip("/") + "/download"
-    else:
-        direct_url = url
-
-    return _validate_https_url(direct_url, description="download")
-
-
-def _open_https(request: urllib.request.Request, *, timeout: int):
-    _validate_https_url(request.full_url, description="download")
-    response = _DOWNLOAD_OPENER.open(request, timeout=timeout)
-    _validate_https_url(response.geturl(), description="final download")
-    return response
-
-
-def _filename(response, index: int) -> str:
-    header = response.headers.get("Content-Disposition", "")
-    match = re.search(r"filename\*\s*=\s*UTF-8''([^;]+)", header, flags=re.IGNORECASE)
-    if match:
-        return Path(urllib.parse.unquote(match.group(1))).name
-    match = re.search(r'filename\s*=\s*"?([^";]+)"?', header, flags=re.IGNORECASE)
-    if match:
-        return Path(urllib.parse.unquote(match.group(1))).name
-    fallback = Path(urllib.parse.urlparse(response.geturl()).path).name
-    if fallback and fallback.lower() != "download":
-        return fallback
-    return f"downloaded_meg_file_{index:04d}.mat"
+from pymegdec.data_download import download_meg_data_files  # noqa: E402
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--data-dir", required=True)
-    parser.add_argument("--env-name", default="MEG_DATA_URL_LIST")
-    parser.add_argument("--manifest", default="data-manifest/downloaded-files.txt")
-    args = parser.parse_args()
-
-    urls = _urls_from_env(args.env_name)
-    if not urls:
-        raise SystemExit(f"{args.env_name} is empty")
-
-    data_dir = Path(args.data_dir)
-    if data_dir.exists():
-        shutil.rmtree(data_dir)
-    data_dir.mkdir(parents=True, exist_ok=True)
-
-    downloaded: list[Path] = []
-    for index, url in enumerate(urls, start=1):
-        request = urllib.request.Request(_direct_url(url), headers={"User-Agent": "PyMEGDec"})
-        with _open_https(request, timeout=180) as response:
-            target = data_dir / _filename(response, index)
-            counter = 2
-            while target.exists():
-                target = data_dir / f"{target.stem}_{counter}{target.suffix}"
-                counter += 1
-            with target.open("wb") as output:
-                shutil.copyfileobj(response, output, length=1024 * 1024)
-        downloaded.append(target)
-        print(f"Downloaded file #{index}: {target.name}")
-
-    manifest = Path(args.manifest)
-    manifest.parent.mkdir(parents=True, exist_ok=True)
-    manifest.write_text("\n".join(str(path) for path in downloaded) + "\n", encoding="utf-8")
-    return 0
+    return download_meg_data_files()
 
 
 if __name__ == "__main__":

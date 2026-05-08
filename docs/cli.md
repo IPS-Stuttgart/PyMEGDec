@@ -1,15 +1,16 @@
 # CLI reference
 
-PyMEGDec exposes one grouped command plus compatibility entry points. Prefer the
-grouped `pymegdec` command for new documentation and scripts.
-
-## Grouped command
+PyMEGDec exposes one grouped command. Prefer the grouped `pymegdec` command for
+new documentation, CI jobs, and shell scripts. Compatibility aliases and
+historical Python wrappers remain available for existing workflows.
 
 ```bash
 pymegdec --help
 ```
 
-Available subcommands:
+## Command groups
+
+### Core decoding
 
 ```bash
 pymegdec cross-validate --participant 2
@@ -19,9 +20,51 @@ pymegdec make-synthetic-data --out demo-data
 pymegdec alpha-movement-results --movement-summary outputs/part2_alpha_movement_summary.csv --effect-output outputs/part2_alpha_movement_effects.csv --condition-summary-output outputs/part2_alpha_movement_condition_summary.csv
 ```
 
-## Compatibility entry points
+### Stimulus workflows
 
-The package also installs these script names:
+```bash
+pymegdec stimulus decoding --participants 2 --output outputs/part2_stimulus_decoding.csv
+pymegdec stimulus predictions --participants 2 --output outputs/stimulus_predictions.csv
+pymegdec stimulus robustness --participants 2 --predictions-output outputs/stimulus_robustness_predictions.csv
+pymegdec stimulus temporal-generalization --participants 2 --output outputs/stimulus_temporal_generalization.csv
+pymegdec stimulus onset-scan --participants 2 --output outputs/stimulus_onset_scan.csv --events-output outputs/stimulus_onset_events.csv
+```
+
+### Alpha workflows
+
+```bash
+pymegdec alpha metrics --participant 2 --output outputs/part2_alpha_metrics.csv
+pymegdec alpha movement --participants 2 --trajectory-output outputs/part2_alpha_movement.csv --summary-output outputs/part2_alpha_movement_summary.csv
+pymegdec alpha movement-results --movement-summary outputs/part2_alpha_movement_summary.csv --effect-output outputs/part2_alpha_movement_effects.csv --condition-summary-output outputs/part2_alpha_movement_condition_summary.csv
+pymegdec alpha reaction-time --participants 2 --joined-output outputs/part2_alpha_rt_joined.csv --summary-output outputs/part2_alpha_rt_summary.csv
+```
+
+### Data helpers
+
+```bash
+pymegdec data download --data-dir data --env-name MEG_DATA_URL_LIST
+```
+
+## Backward-compatible aliases
+
+The following top-level aliases are kept so old commands and existing CI jobs do
+not need to change immediately:
+
+```bash
+pymegdec stimulus-decoding
+pymegdec stimulus-predictions
+pymegdec stimulus-robustness
+pymegdec stimulus-temporal-generalization
+pymegdec stimulus-onset-scan
+pymegdec alpha-metrics
+pymegdec alpha-movement
+pymegdec alpha-movement-results
+pymegdec alpha-reaction-time
+pymegdec alpha-rt
+pymegdec download-meg-data
+```
+
+The installed script names remain available:
 
 ```bash
 pymegdec-cross-validate
@@ -31,13 +74,9 @@ pymegdec-alpha-movement-results
 pymegdec-make-synthetic-data
 ```
 
-Top-level Python wrappers remain available for existing workflows, for example:
-
-```bash
-python analyze_stimulus_decoding.py --participants 2 --output outputs/part2_stimulus_decoding.csv
-python export_alpha_metrics.py --participant 2 --output outputs/part2_alpha_metrics.csv
-python analyze_alpha_movement.py --participants 2 --trajectory-output outputs/part2_alpha_movement.csv --summary-output outputs/part2_alpha_movement_summary.csv
-```
+Top-level Python wrappers such as `python export_alpha_metrics.py` and
+`scripts/export_stimulus_predictions.py` now delegate to the package-level
+command handlers.
 
 ## Shared decoding options
 
@@ -95,9 +134,6 @@ Cross-validate one participant's main dataset:
 pymegdec cross-validate --data-dir /path/to/MEG-Data --participant 2 --folds 10
 ```
 
-The command prints the accuracy returned by
-`pymegdec.cross_validation.cross_validate_single_dataset`.
-
 ## Model transfer
 
 Train on the main experiment file and validate on the cue file for one
@@ -107,15 +143,12 @@ participant:
 pymegdec transfer --data-dir /path/to/MEG-Data --participant 2 --null-window-center nan
 ```
 
-The command prints the accuracy returned by
-`pymegdec.model_transfer.evaluate_model_transfer`.
-
 ## Stimulus decoding
 
 Run train-main / validate-cue decoding across a time range:
 
 ```bash
-pymegdec stimulus-decoding \
+pymegdec stimulus decoding \
   --data-dir /path/to/MEG-Data \
   --participants 2 \
   --time-window=-0.2,0.6 \
@@ -128,12 +161,64 @@ pymegdec stimulus-decoding \
 Use `--transfer-direction cue-to-main` to train on cue data and validate on the
 main experiment data.
 
-## Alpha movement result analysis
+## Stimulus prediction diagnostics
 
-Analyze a movement summary exported by `analyze_alpha_movement.py`:
+Export trial-level predictions and optional confusion/per-stimulus summaries for
+selected diagnostic windows:
 
 ```bash
-pymegdec alpha-movement-results \
+pymegdec stimulus predictions \
+  --data-dir /path/to/MEG-Data \
+  --participants 2 \
+  --window-centers=-0.175,0.175 \
+  --output outputs/stimulus_predictions.csv \
+  --summary-output outputs/stimulus_prediction_summary.csv \
+  --confusion-output outputs/stimulus_confusion.csv \
+  --per-stimulus-output outputs/stimulus_per_class.csv
+```
+
+## Stimulus robustness controls
+
+```bash
+pymegdec stimulus robustness \
+  --data-dir /path/to/MEG-Data \
+  --participants 1-4,6,8,9,10,13-27 \
+  --window-centers=-0.175,0.175 \
+  --predictions-output outputs/stimulus_robustness_predictions.csv \
+  --accuracy-output outputs/stimulus_robustness_accuracy.csv \
+  --summary-output outputs/stimulus_robustness_summary.csv
+```
+
+## Stimulus temporal generalization
+
+```bash
+pymegdec stimulus temporal-generalization \
+  --data-dir /path/to/MEG-Data \
+  --participants 2 \
+  --time-window=-0.4,0.8 \
+  --window-step-s 0.025 \
+  --output outputs/stimulus_temporal_generalization.csv \
+  --summary-output outputs/stimulus_temporal_generalization_summary.csv
+```
+
+## Stimulus onset scan
+
+```bash
+pymegdec stimulus onset-scan \
+  --data-dir /path/to/MEG-Data \
+  --participants 2 \
+  --scan-time-window=-0.4,0.8 \
+  --threshold-window=-0.35,-0.05 \
+  --output outputs/stimulus_onset_scan.csv \
+  --events-output outputs/stimulus_onset_events.csv
+```
+
+## Alpha movement result analysis
+
+Analyze a movement summary exported by `pymegdec alpha movement`:
+
+```bash
+pymegdec alpha movement-results \
   --movement-summary outputs/part2_alpha_movement_summary.csv \
   --effect-output outputs/part2_alpha_movement_effects.csv \
   --condition-summary-output outputs/part2_alpha_movement_condition_summary.csv \
