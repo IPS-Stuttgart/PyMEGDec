@@ -10,6 +10,9 @@ import numpy as np
 import scipy.io as sio
 
 
+# This config intentionally keeps all generator knobs in one immutable value
+# object so tests, docs, and CLI output can serialize the exact configuration.
+# pylint: disable-next=too-many-instance-attributes
 @dataclass(frozen=True)
 class SyntheticDataConfig:
     """Configuration for a private-data-free PyMEGDec demo dataset.
@@ -52,34 +55,37 @@ class SyntheticDataOutput:
     n_times: int
 
 
+def _require(condition: bool, message: str) -> None:
+    if not condition:
+        raise ValueError(message)
+
+
 def _validate_config(config: SyntheticDataConfig) -> None:
-    if config.participant_id < 1:
-        raise ValueError("participant_id must be positive.")
-    if config.n_classes < 2:
-        raise ValueError("n_classes must be at least 2 for decoding demos.")
-    if config.main_repeats_per_class < 1:
-        raise ValueError("main_repeats_per_class must be at least 1.")
-    if config.cue_repeats_per_class < 1:
-        raise ValueError("cue_repeats_per_class must be at least 1.")
-    if config.n_channels < 3:
-        raise ValueError("n_channels must be at least 3 so sensor geometry is usable.")
-    if config.n_times < 3:
-        raise ValueError("n_times must be at least 3.")
-    if config.tmin >= config.tmax:
-        raise ValueError("tmin must be smaller than tmax.")
+    for field_name, minimum, message in (
+        ("participant_id", 1, "participant_id must be positive."),
+        ("n_classes", 2, "n_classes must be at least 2 for decoding demos."),
+        ("main_repeats_per_class", 1, "main_repeats_per_class must be at least 1."),
+        ("cue_repeats_per_class", 1, "cue_repeats_per_class must be at least 1."),
+        ("n_channels", 3, "n_channels must be at least 3 so sensor geometry is usable."),
+        ("n_times", 3, "n_times must be at least 3."),
+    ):
+        _require(getattr(config, field_name) >= minimum, message)
+
     window_start, window_stop = config.stimulus_window
-    if window_start >= window_stop:
-        raise ValueError("stimulus_window start must be smaller than stop.")
-    if window_stop < config.tmin or window_start > config.tmax:
-        raise ValueError("stimulus_window must overlap the generated time vector.")
-    if config.signal_scale <= 0:
-        raise ValueError("signal_scale must be positive.")
-    if config.noise_scale < 0:
-        raise ValueError("noise_scale must be non-negative.")
-    if config.alpha_scale < 0:
-        raise ValueError("alpha_scale must be non-negative.")
-    if config.cue_shift_scale < 0:
-        raise ValueError("cue_shift_scale must be non-negative.")
+    _require(config.tmin < config.tmax, "tmin must be smaller than tmax.")
+    _require(window_start < window_stop, "stimulus_window start must be smaller than stop.")
+    _require(
+        window_stop >= config.tmin and window_start <= config.tmax,
+        "stimulus_window must overlap the generated time vector.",
+    )
+    for field_name, message in (
+        ("signal_scale", "signal_scale must be positive."),
+        ("noise_scale", "noise_scale must be non-negative."),
+        ("alpha_scale", "alpha_scale must be non-negative."),
+        ("cue_shift_scale", "cue_shift_scale must be non-negative."),
+    ):
+        lower_bound = 0.0 if field_name != "signal_scale" else np.finfo(float).tiny
+        _require(getattr(config, field_name) >= lower_bound, message)
 
 
 def _balanced_labels(n_classes: int, repeats_per_class: int) -> np.ndarray:
