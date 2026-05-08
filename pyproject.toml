@@ -52,6 +52,7 @@ pymegdec-cross-validate = "pymegdec.cli:cross_validate"
 pymegdec-transfer = "pymegdec.cli:transfer"
 pymegdec-stimulus-decoding = "pymegdec.cli:stimulus_decoding"
 pymegdec-alpha-movement-results = "pymegdec.cli:alpha_movement_results"
+pymegdec-make-synthetic-data = "pymegdec.cli:make_synthetic_data"
 
 [tool.poetry]
 packages = [{ include = "pymegdec", from = "src" }]
