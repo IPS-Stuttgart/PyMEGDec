@@ -47,11 +47,18 @@ dev = [
 ]
 
 [project.scripts]
-pymegdec = "pymegdec.cli:main"
-pymegdec-cross-validate = "pymegdec.cli:cross_validate"
-pymegdec-transfer = "pymegdec.cli:transfer"
-pymegdec-stimulus-decoding = "pymegdec.cli:stimulus_decoding"
+pymegdec = "pymegdec.cli_consolidated:main"
+pymegdec-alpha-metrics = "pymegdec.cli_consolidated:main"
+pymegdec-alpha-movement = "pymegdec.cli_consolidated:main"
 pymegdec-alpha-movement-results = "pymegdec.cli:alpha_movement_results"
+pymegdec-alpha-reaction-time = "pymegdec.cli_consolidated:main"
+pymegdec-cross-validate = "pymegdec.cli:cross_validate"
+pymegdec-stimulus-decoding = "pymegdec.cli:stimulus_decoding"
+pymegdec-stimulus-onset-scan = "pymegdec.cli_consolidated:main"
+pymegdec-stimulus-predictions = "pymegdec.cli_consolidated:main"
+pymegdec-stimulus-robustness = "pymegdec.cli_consolidated:main"
+pymegdec-stimulus-temporal-generalization = "pymegdec.cli_consolidated:main"
+pymegdec-transfer = "pymegdec.cli:transfer"
 
 [tool.poetry]
 packages = [{ include = "pymegdec", from = "src" }]
