@@ -109,7 +109,8 @@ def stimulus_onset_scan(argv: Sequence[str] | None = None, prog: str | None = No
     return _run_script("scripts/export_stimulus_onset_scan.py", sys.argv[1:] if argv is None else argv, prog or "pymegdec-stimulus-onset-scan")
 
 
-def _resolve_command(argv: Sequence[str]):
+def resolve_command(argv: Sequence[str]):
+    """Resolve a grouped or compatibility command into its handler and arguments."""
     two_token = tuple(argv[:2])
     if two_token in _LEGACY_COMMANDS:
         command_display, handler = _LEGACY_COMMANDS[two_token]
@@ -184,7 +185,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         _print_group_help(argv[0])
         return 0
 
-    resolved = _resolve_command(argv)
+    resolved = resolve_command(argv)
     if resolved is None:
         parser.error(f"Unsupported command: {' '.join(argv[:2]) if len(argv) > 1 else argv[0]}")
         return 2
