@@ -48,16 +48,16 @@ dev = [
 
 [project.scripts]
 pymegdec = "pymegdec.cli_consolidated:main"
-pymegdec-alpha-metrics = "pymegdec.cli_consolidated:main"
-pymegdec-alpha-movement = "pymegdec.cli_consolidated:main"
+pymegdec-alpha-metrics = "pymegdec.cli_consolidated:alpha_metrics"
+pymegdec-alpha-movement = "pymegdec.cli_consolidated:alpha_movement"
 pymegdec-alpha-movement-results = "pymegdec.cli:alpha_movement_results"
-pymegdec-alpha-reaction-time = "pymegdec.cli_consolidated:main"
+pymegdec-alpha-reaction-time = "pymegdec.cli_consolidated:alpha_reaction_time"
 pymegdec-cross-validate = "pymegdec.cli:cross_validate"
 pymegdec-stimulus-decoding = "pymegdec.cli:stimulus_decoding"
-pymegdec-stimulus-onset-scan = "pymegdec.cli_consolidated:main"
-pymegdec-stimulus-predictions = "pymegdec.cli_consolidated:main"
-pymegdec-stimulus-robustness = "pymegdec.cli_consolidated:main"
-pymegdec-stimulus-temporal-generalization = "pymegdec.cli_consolidated:main"
+pymegdec-stimulus-onset-scan = "pymegdec.cli_consolidated:stimulus_onset_scan"
+pymegdec-stimulus-predictions = "pymegdec.cli_consolidated:stimulus_predictions"
+pymegdec-stimulus-robustness = "pymegdec.cli_consolidated:stimulus_robustness"
+pymegdec-stimulus-temporal-generalization = "pymegdec.cli_consolidated:stimulus_temporal_generalization"
 pymegdec-transfer = "pymegdec.cli:transfer"
 
 [tool.poetry]
