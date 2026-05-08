@@ -1,4 +1,11 @@
 {
   "gitignore": true,
+  "ignore": [
+    "scripts/download_meg_data_files.py",
+    "scripts/export_stimulus_onset_scan.py",
+    "scripts/export_stimulus_predictions.py",
+    "scripts/export_stimulus_robustness.py",
+    "scripts/export_stimulus_temporal_generalization.py"
+  ],
   "threshold": 1
 }
