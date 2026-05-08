@@ -8,6 +8,7 @@ from collections.abc import Callable, Sequence
 
 from pymegdec import alpha_cli, cli as legacy_cli, stimulus_cli
 from pymegdec.data_download import download_meg_data_files
+from pymegdec.synthetic_data_cli import make_synthetic_data
 
 CommandHandler = Callable[[Sequence[str] | None, str | None], int]
 
@@ -54,6 +55,7 @@ def _top_level_handlers() -> dict[str, CommandHandler]:
     return {
         "cross-validate": legacy_cli.cross_validate,
         "transfer": legacy_cli.transfer,
+        "make-synthetic-data": make_synthetic_data,
         # Backward-compatible top-level aliases. Prefer grouped forms in new docs.
         "stimulus-decoding": legacy_cli.stimulus_decoding,
         "stimulus-predictions": stimulus_cli.stimulus_predictions,
@@ -81,6 +83,7 @@ def _print_main_help() -> None:
         "\nCore commands:\n"
         "  pymegdec cross-validate ...\n"
         "  pymegdec transfer ...\n"
+        "  pymegdec make-synthetic-data ...\n"
         "\nCompatibility aliases such as pymegdec stimulus-decoding and pymegdec alpha-metrics remain available."
     )
 
