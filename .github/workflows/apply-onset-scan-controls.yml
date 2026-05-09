@@ -1,0 +1,218 @@
+name: Apply onset-scan controls patch
+
+on:
+  push:
+    branches:
+      - onset-scan-sustained-controls
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: ${{ !contains(github.event.head_commit.message, 'Add sustained onset-scan detection controls') }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: onset-scan-sustained-controls
+          token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Apply deterministic onset-scan edits
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          def replace_once(text: str, old: str, new: str, *, label: str) -> str:
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f"{label}: expected one occurrence, found {count}")
+              return text.replace(old, new, 1)
+
+          def replace_all(text: str, old: str, new: str, *, label: str, min_count: int = 1) -> str:
+              count = text.count(old)
+              if count < min_count:
+                  raise SystemExit(f"{label}: expected at least {min_count} occurrence(s), found {count}")
+              return text.replace(old, new)
+
+          path = Path("src/pymegdec/stimulus_decoding.py")
+          text = path.read_text(encoding="utf-8")
+          if "DEFAULT_ONSET_THRESHOLD_METHOD" not in text:
+              text = replace_once(
+                  text,
+                  'DEFAULT_ONSET_THRESHOLD_QUANTILE = 0.95\nTRANSFER_DIRECTIONS = ("main-to-cue", "cue-to-main")',
+                  'DEFAULT_ONSET_THRESHOLD_QUANTILE = 0.95\nDEFAULT_ONSET_THRESHOLD_METHOD = "point"\nDEFAULT_ONSET_MIN_CONSECUTIVE = 1\nDEFAULT_ONSET_MIN_DURATION = None\nDEFAULT_ONSET_REQUIRE_STABLE_PREDICTION = False\nONSET_THRESHOLD_METHODS = ("point", "max_run")\nTRANSFER_DIRECTIONS = ("main-to-cue", "cue-to-main")',
+                  label="stimulus_decoding constants",
+              )
+          text = replace_all(
+              text,
+              '    threshold_quantile=DEFAULT_ONSET_THRESHOLD_QUANTILE,\n    detection_start_s=None,',
+              '    threshold_quantile=DEFAULT_ONSET_THRESHOLD_QUANTILE,\n    threshold_method=DEFAULT_ONSET_THRESHOLD_METHOD,\n    min_consecutive=DEFAULT_ONSET_MIN_CONSECUTIVE,\n    min_duration=DEFAULT_ONSET_MIN_DURATION,\n    require_stable_prediction=DEFAULT_ONSET_REQUIRE_STABLE_PREDICTION,\n    detection_start_s=None,',
+              label="onset function signatures",
+              min_count=2,
+          )
+          text = replace_once(
+              text,
+              '        threshold_window=threshold_window,\n        threshold_quantile=threshold_quantile,\n    )\n    event_rows = _stimulus_onset_event_rows_from_reptrace(',
+              '        threshold_window=threshold_window,\n        threshold_quantile=threshold_quantile,\n        threshold_method=threshold_method,\n        min_consecutive=min_consecutive,\n        min_duration=min_duration,\n        require_stable_prediction=require_stable_prediction,\n    )\n    event_rows = _stimulus_onset_event_rows_from_reptrace(',
+              label="annotate call controls",
+          )
+          text = replace_once(
+              text,
+              '        threshold_window=threshold_window,\n        threshold_quantile=threshold_quantile,\n        detection_start_s=detection_start_s,\n    )',
+              '        threshold_window=threshold_window,\n        threshold_quantile=threshold_quantile,\n        threshold_method=threshold_method,\n        min_consecutive=min_consecutive,\n        min_duration=min_duration,\n        require_stable_prediction=require_stable_prediction,\n        detection_start_s=detection_start_s,\n    )',
+              label="event call controls",
+          )
+          text = replace_once(
+              text,
+              '            threshold_window=threshold_window,\n            threshold_quantile=threshold_quantile,\n            detection_start_s=detection_start_s,\n        )',
+              '            threshold_window=threshold_window,\n            threshold_quantile=threshold_quantile,\n            threshold_method=threshold_method,\n            min_consecutive=min_consecutive,\n            min_duration=min_duration,\n            require_stable_prediction=require_stable_prediction,\n            detection_start_s=detection_start_s,\n        )',
+              label="export participant call controls",
+          )
+          text = replace_once(
+              text,
+              '            "train_window_center_s",\n            "scan_window_center_s",',
+              '            "train_window_center_s",\n            "threshold_method",\n            "min_consecutive",\n            "min_duration_s",\n            "require_stable_prediction",\n            "scan_window_center_s",',
+              label="scan summary group fields",
+          )
+          text = replace_once(
+              text,
+              '            "train_window_center_s",\n            "classifier",',
+              '            "train_window_center_s",\n            "threshold_method",\n            "min_consecutive",\n            "min_duration_s",\n            "require_stable_prediction",\n            "classifier",',
+              label="event summary group fields",
+          )
+          text = replace_once(
+              text,
+              '                "threshold_window_stop_s": group_rows[0].get("threshold_window_stop_s", np.nan),\n                "chance_accuracy": group_rows[0].get("chance_accuracy", np.nan),',
+              '                "threshold_window_stop_s": group_rows[0].get("threshold_window_stop_s", np.nan),\n                "threshold_method": group_rows[0].get("threshold_method", ""),\n                "min_consecutive": group_rows[0].get("min_consecutive", np.nan),\n                "min_duration_s": group_rows[0].get("min_duration_s", np.nan),\n                "require_stable_prediction": group_rows[0].get("require_stable_prediction", False),\n                "chance_accuracy": group_rows[0].get("chance_accuracy", np.nan),',
+              label="scan summary metadata",
+          )
+          text = replace_once(
+              text,
+              '                "threshold_window_stop_s": group_rows[0].get("threshold_window_stop_s", np.nan),\n            }\n        )\n        summary_rows.append(summary_row)\n    return summary_rows\n\n\n# jscpd:ignore-end\ndef _load_participant_data',
+              '                "threshold_window_stop_s": group_rows[0].get("threshold_window_stop_s", np.nan),\n                "threshold_method": group_rows[0].get("threshold_method", ""),\n                "min_consecutive": group_rows[0].get("min_consecutive", np.nan),\n                "min_duration_s": group_rows[0].get("min_duration_s", np.nan),\n                "require_stable_prediction": group_rows[0].get("require_stable_prediction", False),\n            }\n        )\n        summary_rows.append(summary_row)\n    return summary_rows\n\n\n# jscpd:ignore-end\ndef _load_participant_data',
+              label="event summary metadata",
+          )
+          text = replace_once(
+              text,
+              'def _annotate_stimulus_onset_scan_with_reptrace(scan_rows, *, threshold_window, threshold_quantile):',
+              'def _annotate_stimulus_onset_scan_with_reptrace(\n    scan_rows,\n    *,\n    threshold_window,\n    threshold_quantile,\n    threshold_method=DEFAULT_ONSET_THRESHOLD_METHOD,\n    min_consecutive=DEFAULT_ONSET_MIN_CONSECUTIVE,\n    min_duration=DEFAULT_ONSET_MIN_DURATION,\n    require_stable_prediction=DEFAULT_ONSET_REQUIRE_STABLE_PREDICTION,\n):',
+              label="annotate helper signature",
+          )
+          text = replace_once(
+              text,
+              '        threshold_quantile=threshold_quantile,\n        score_column="stimulus_score",\n    )\n    thresholded["threshold_window_start_s"] = thresholded["threshold_window_start"]',
+              '        threshold_quantile=threshold_quantile,\n        score_column="stimulus_score",\n        threshold_method=threshold_method,\n        min_consecutive=min_consecutive,\n        min_duration=min_duration,\n        require_stable_prediction=require_stable_prediction,\n    )\n    thresholded["threshold_window_start_s"] = thresholded["threshold_window_start"]',
+              label="annotate helper arguments",
+          )
+          text = replace_once(
+              text,
+              '    thresholded["threshold_window_stop_s"] = thresholded["threshold_window_stop"]\n    return thresholded[original_columns].to_dict(orient="records")',
+              '    thresholded["threshold_window_stop_s"] = thresholded["threshold_window_stop"]\n    thresholded["min_consecutive"] = int(min_consecutive)\n    thresholded["min_duration_s"] = min_duration if min_duration is not None else np.nan\n    thresholded["require_stable_prediction"] = bool(require_stable_prediction)\n    metadata_columns = [\n        "threshold_method",\n        "min_consecutive",\n        "min_duration_s",\n        "require_stable_prediction",\n    ]\n    output_columns = original_columns + [column for column in metadata_columns if column not in original_columns]\n    return thresholded[output_columns].to_dict(orient="records")',
+              label="annotate helper metadata columns",
+          )
+          text = replace_once(
+              text,
+              'def _stimulus_onset_event_rows_from_reptrace(scan_rows, *, threshold_window, threshold_quantile, detection_start_s=None):',
+              'def _stimulus_onset_event_rows_from_reptrace(\n    scan_rows,\n    *,\n    threshold_window,\n    threshold_quantile,\n    threshold_method=DEFAULT_ONSET_THRESHOLD_METHOD,\n    min_consecutive=DEFAULT_ONSET_MIN_CONSECUTIVE,\n    min_duration=DEFAULT_ONSET_MIN_DURATION,\n    require_stable_prediction=DEFAULT_ONSET_REQUIRE_STABLE_PREDICTION,\n    detection_start_s=None,\n):',
+              label="event helper signature",
+          )
+          text = replace_once(
+              text,
+              '        threshold_quantile=threshold_quantile,\n        score_column="stimulus_score",\n        detection_start=detection_start_s,',
+              '        threshold_quantile=threshold_quantile,\n        score_column="stimulus_score",\n        threshold_method=threshold_method,\n        min_consecutive=min_consecutive,\n        min_duration=min_duration,\n        require_stable_prediction=require_stable_prediction,\n        detection_start=detection_start_s,',
+              label="event helper arguments",
+          )
+          text = replace_once(
+              text,
+              'def _stimulus_onset_event_row_from_reptrace(reference_row, event, detection_start_s):\n    detected = bool(event["detected"])\n    return {',
+              'def _stimulus_onset_event_row_from_reptrace(reference_row, event, detection_start_s):\n    detected = bool(event["detected"])\n    min_duration = event.get("min_duration", np.nan)\n    if min_duration is None:\n        min_duration = np.nan\n    return {',
+              label="event row min_duration",
+          )
+          text = replace_once(
+              text,
+              '        "threshold_window_stop_s": event["threshold_window_stop"],\n        "detection_start_s": detection_start_s if detection_start_s is not None else np.nan,',
+              '        "threshold_window_stop_s": event["threshold_window_stop"],\n        "threshold_method": event.get("threshold_method", reference_row.get("threshold_method", "")),\n        "min_consecutive": event.get("min_consecutive", reference_row.get("min_consecutive", np.nan)),\n        "min_duration_s": min_duration,\n        "require_stable_prediction": bool(event.get("require_stable_prediction", reference_row.get("require_stable_prediction", False))),\n        "detection_run_length": event.get("detection_run_length", 0),\n        "detection_run_duration_s": event.get("detection_run_duration", np.nan),\n        "detection_run_stop_time_s": event.get("detection_run_stop_time", np.nan),\n        "stimulus_score_peak_in_run": event.get("score_peak_in_run", np.nan),\n        "detection_start_s": detection_start_s if detection_start_s is not None else np.nan,',
+              label="event row metadata",
+          )
+          path.write_text(text, encoding="utf-8")
+
+          path = Path("src/pymegdec/stimulus_cli.py")
+          text = path.read_text(encoding="utf-8")
+          text = replace_once(
+              text,
+              '    DEFAULT_ONSET_SCAN_TIME_WINDOW,\n    DEFAULT_ONSET_SCAN_TRAIN_WINDOW_CENTER,\n    DEFAULT_ONSET_THRESHOLD_QUANTILE,\n    DEFAULT_ONSET_THRESHOLD_WINDOW,\n    TRANSFER_DIRECTIONS,',
+              '    DEFAULT_ONSET_SCAN_TIME_WINDOW,\n    DEFAULT_ONSET_SCAN_TRAIN_WINDOW_CENTER,\n    DEFAULT_ONSET_MIN_CONSECUTIVE,\n    DEFAULT_ONSET_MIN_DURATION,\n    DEFAULT_ONSET_REQUIRE_STABLE_PREDICTION,\n    DEFAULT_ONSET_THRESHOLD_METHOD,\n    DEFAULT_ONSET_THRESHOLD_QUANTILE,\n    DEFAULT_ONSET_THRESHOLD_WINDOW,\n    ONSET_THRESHOLD_METHODS,\n    TRANSFER_DIRECTIONS,',
+              label="stimulus_cli imports",
+          )
+          text = replace_once(
+              text,
+              '    parser.add_argument("--threshold-quantile", type=float, default=DEFAULT_ONSET_THRESHOLD_QUANTILE, help="Quantile of threshold-window scores used as detection threshold.")\n    parser.add_argument("--detection-start-s", type=parse_float_or_inf, default=None, help="Optional earliest scan center considered for first detection.")',
+              '    parser.add_argument("--threshold-quantile", type=float, default=DEFAULT_ONSET_THRESHOLD_QUANTILE, help="Quantile of threshold-window scores used as detection threshold.")\n    parser.add_argument(\n        "--threshold-method",\n        choices=ONSET_THRESHOLD_METHODS,\n        default=DEFAULT_ONSET_THRESHOLD_METHOD,\n        help="Threshold estimator: point uses pointwise baseline scores; max_run uses sequence-level baseline maxima under the run criteria.",\n    )\n    parser.add_argument(\n        "--min-consecutive",\n        type=int,\n        default=DEFAULT_ONSET_MIN_CONSECUTIVE,\n        help="Minimum number of adjacent above-threshold scan windows required for a detection.",\n    )\n    parser.add_argument(\n        "--min-duration",\n        type=float,\n        default=DEFAULT_ONSET_MIN_DURATION,\n        help="Optional minimum above-threshold run duration in seconds.",\n    )\n    parser.add_argument(\n        "--require-stable-prediction",\n        action="store_true",\n        default=DEFAULT_ONSET_REQUIRE_STABLE_PREDICTION,\n        help="Break onset runs when the predicted stimulus changes across adjacent above-threshold windows.",\n    )\n    parser.add_argument("--detection-start-s", type=parse_float_or_inf, default=None, help="Optional earliest scan center considered for first detection.")',
+              label="stimulus_cli parser args",
+          )
+          text = replace_once(
+              text,
+              '    if not 0.0 <= args.threshold_quantile <= 1.0:\n        parser.error("--threshold-quantile must be between 0 and 1.")\n    data_folder = resolve_data_folder(args.data_folder)',
+              '    if not 0.0 <= args.threshold_quantile <= 1.0:\n        parser.error("--threshold-quantile must be between 0 and 1.")\n    if args.min_consecutive < 1:\n        parser.error("--min-consecutive must be at least 1.")\n    if args.min_duration is not None and args.min_duration < 0:\n        parser.error("--min-duration must be non-negative.")\n    data_folder = resolve_data_folder(args.data_folder)',
+              label="stimulus_cli validation",
+          )
+          text = replace_once(
+              text,
+              '        threshold_window=args.threshold_window,\n        threshold_quantile=args.threshold_quantile,\n        detection_start_s=args.detection_start_s,',
+              '        threshold_window=args.threshold_window,\n        threshold_quantile=args.threshold_quantile,\n        threshold_method=args.threshold_method,\n        min_consecutive=args.min_consecutive,\n        min_duration=args.min_duration,\n        require_stable_prediction=args.require_stable_prediction,\n        detection_start_s=args.detection_start_s,',
+              label="stimulus_cli export call",
+          )
+          path.write_text(text, encoding="utf-8")
+
+          path = Path("docs/stimulus-decoding.md")
+          text = path.read_text(encoding="utf-8")
+          if "--threshold-method max_run" not in text:
+              text = replace_once(
+                  text,
+                  '  --window-step-s 0.025 `\n  --output outputs\\part2_stimulus_onset_scan.csv `',
+                  '  --window-step-s 0.025 `\n  --threshold-method max_run `\n  --min-consecutive 2 `\n  --min-duration 0.05 `\n  --require-stable-prediction `\n  --detection-start-s 0.0 `\n  --output outputs\\part2_stimulus_onset_scan.csv `',
+                  label="docs onset command",
+              )
+              text = text.replace(
+                  '  --event-summary-output outputs\\part2_stimulus_onset_event_summary.csv\n```\n',
+                  '  --event-summary-output outputs\\part2_stimulus_onset_event_summary.csv\n```\n\n`--threshold-method max_run` estimates thresholds from sequence-level baseline\nmaxima under the same run criterion used by the detector. Combine it with\n`--min-consecutive`, `--min-duration`, and `--require-stable-prediction` to\nsuppress one-bin spikes and class-flip artifacts while scanning many candidate\ntime bins.\n',
+                  1,
+              )
+          path.write_text(text, encoding="utf-8")
+
+          path = Path("tests/test_stimulus_decoding.py")
+          text = path.read_text(encoding="utf-8")
+          if "_onset_scan_row" not in text:
+              text = replace_once(
+                  text,
+                  '    summarize_stimulus_temporal_generalization,\n    window_centers_from_range,\n)',
+                  '    summarize_stimulus_temporal_generalization,\n    window_centers_from_range,\n    _annotate_stimulus_onset_scan_with_reptrace,\n    _stimulus_onset_event_rows_from_reptrace,\n)',
+                  label="tests imports",
+              )
+              text = replace_once(
+                  text,
+                  '\n\nclass TestStimulusDecoding(unittest.TestCase):',
+                  '\n\ndef _onset_scan_row(time, score, *, predicted_label=1, trial=0):\n    scan_window = (time - 0.0125, time + 0.0125)\n    correct = predicted_label == 1\n    return {\n        "participant": 1,\n        "variant": "without_null",\n        "transfer_direction": "main-to-cue",\n        "train_window_center_s": 0.175,\n        "train_window_start_s": 0.125,\n        "train_window_stop_s": 0.225,\n        "scan_window_center_s": time,\n        "scan_window_start_s": scan_window[0],\n        "scan_window_stop_s": scan_window[1],\n        "trial": trial,\n        "validation_trial_index": trial,\n        "validation_trial_number": trial + 1,\n        "true_label": 1,\n        "predicted_label": predicted_label,\n        "true_stimulus": 1,\n        "predicted_stimulus": predicted_label,\n        "true_stimulus_id": 1,\n        "predicted_stimulus_id": predicted_label,\n        "correct": correct,\n        "stimulus_score": score,\n        "score_threshold": np.nan,\n        "above_threshold": False,\n        "threshold_quantile": 0.0,\n        "threshold_window_start_s": -0.10,\n        "threshold_window_stop_s": -0.05,\n        "chance_accuracy": 0.5,\n        "chance_percent": 50.0,\n        "classifier": "multiclass-svm",\n        "classifier_param": 0.5,\n        "components_pca": 100,\n        "actual_components_pca": 1,\n        "pca_explained_variance_percent": 100.0,\n        "frequency_low_hz": 0.0,\n        "frequency_high_hz": float("inf"),\n    }\n\n\nclass TestStimulusDecoding(unittest.TestCase):',
+                  label="tests helper",
+              )
+              text = replace_once(
+                  text,
+                  '        self.assertTrue(all(row["correct_detected_stimulus"] for row in event_rows))\n\n    def test_summarize_stimulus_onset_scan_and_events(self):',
+                  '        self.assertTrue(all(row["correct_detected_stimulus"] for row in event_rows))\n\n    def test_onset_scan_sustained_run_rejects_one_bin_spike(self):\n        scan_rows = [\n            _onset_scan_row(-0.10, 0.10),\n            _onset_scan_row(-0.05, 0.10),\n            _onset_scan_row(0.00, 2.00),\n            _onset_scan_row(0.05, 0.00),\n        ]\n\n        thresholded = _annotate_stimulus_onset_scan_with_reptrace(\n            scan_rows,\n            threshold_window=(-0.10, -0.05),\n            threshold_quantile=0.0,\n            threshold_method="max_run",\n            min_consecutive=2,\n        )\n        event_rows = _stimulus_onset_event_rows_from_reptrace(\n            thresholded,\n            threshold_window=(-0.10, -0.05),\n            threshold_quantile=0.0,\n            threshold_method="max_run",\n            min_consecutive=2,\n            detection_start_s=0.0,\n        )\n\n        self.assertEqual(len(event_rows), 1)\n        self.assertFalse(event_rows[0]["detected"])\n        self.assertEqual(event_rows[0]["min_consecutive"], 2)\n        self.assertEqual(event_rows[0]["threshold_method"], "max_run")\n\n    def test_onset_scan_stable_prediction_requirement_breaks_class_flips(self):\n        scan_rows = [\n            _onset_scan_row(-0.10, 0.10, predicted_label=1),\n            _onset_scan_row(-0.05, 0.10, predicted_label=1),\n            _onset_scan_row(0.00, 2.00, predicted_label=1),\n            _onset_scan_row(0.05, 2.00, predicted_label=2),\n        ]\n\n        thresholded = _annotate_stimulus_onset_scan_with_reptrace(\n            scan_rows,\n            threshold_window=(-0.10, -0.05),\n            threshold_quantile=0.0,\n            threshold_method="max_run",\n            min_consecutive=2,\n            require_stable_prediction=True,\n        )\n        event_rows = _stimulus_onset_event_rows_from_reptrace(\n            thresholded,\n            threshold_window=(-0.10, -0.05),\n            threshold_quantile=0.0,\n            threshold_method="max_run",\n            min_consecutive=2,\n            require_stable_prediction=True,\n            detection_start_s=0.0,\n        )\n\n        self.assertEqual(len(event_rows), 1)\n        self.assertFalse(event_rows[0]["detected"])\n        self.assertTrue(event_rows[0]["require_stable_prediction"])\n\n    def test_summarize_stimulus_onset_scan_and_events(self):',
+                  label="tests onset controls",
+              )
+          path.write_text(text, encoding="utf-8")
+          PY
+      - name: Commit applied edits
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -f .github/workflows/apply-onset-scan-controls.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git diff --cached --stat
+          git commit -m "Add sustained onset-scan detection controls"
+          git push origin HEAD:onset-scan-sustained-controls
