@@ -215,6 +215,7 @@ jobs:
             "--threshold-window=${THRESHOLD_WINDOW}" \
             --threshold-quantile "${THRESHOLD_QUANTILE}" \
             --threshold-method point \
+            --detection-start-s 0.0 \
             --output outputs/stimulus_onset_scan_point.csv \
             --events-output outputs/stimulus_onset_events_point.csv \
             --summary-output outputs/stimulus_onset_scan_summary_point.csv \
@@ -251,13 +252,18 @@ jobs:
 
           table = pd.DataFrame(rows)
           table.to_csv("outputs/stimulus_onset_quality_summary.csv", index=False)
-          markdown = table.to_markdown(index=False, floatfmt=".4f") if not table.empty else "No summary rows produced."
+          if table.empty:
+              table_block = "No summary rows produced."
+          else:
+              plain_table = table.to_string(index=False, float_format=lambda value: f"{value:.4f}")
+              table_block = f"```\n{plain_table}\n```"
           text = "\n".join([
               "# Stimulus onset benchmark",
               "",
               "Lower false-alarm rate is better. Post-stimulus detection and correct-at-detection should stay meaningfully above chance.",
+              "Both benchmark settings use `--detection-start-s 0.0`, so first detections before stimulus onset are excluded consistently.",
               "",
-              markdown,
+              table_block,
               "",
           ])
           Path("outputs/README.md").write_text(text, encoding="utf-8")
