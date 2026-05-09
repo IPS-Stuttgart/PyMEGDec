@@ -54,6 +54,11 @@ DEFAULT_ONSET_SCAN_TIME_WINDOW = (-0.4, 0.8)
 DEFAULT_ONSET_SCAN_STEP_S = 0.025
 DEFAULT_ONSET_THRESHOLD_WINDOW = (-0.35, -0.05)
 DEFAULT_ONSET_THRESHOLD_QUANTILE = 0.95
+DEFAULT_ONSET_THRESHOLD_METHOD = "point"
+DEFAULT_ONSET_MIN_CONSECUTIVE = 1
+DEFAULT_ONSET_MIN_DURATION = None
+DEFAULT_ONSET_REQUIRE_STABLE_PREDICTION = False
+ONSET_THRESHOLD_METHODS = ("point", "max_run")
 TRANSFER_DIRECTIONS = ("main-to-cue", "cue-to-main")
 SUMMARY_GROUP_FIELDS = (
     "control",
@@ -615,6 +620,10 @@ def evaluate_participant_stimulus_onset_scan(
     train_window_center=DEFAULT_ONSET_SCAN_TRAIN_WINDOW_CENTER,
     threshold_window=DEFAULT_ONSET_THRESHOLD_WINDOW,
     threshold_quantile=DEFAULT_ONSET_THRESHOLD_QUANTILE,
+    threshold_method=DEFAULT_ONSET_THRESHOLD_METHOD,
+    min_consecutive=DEFAULT_ONSET_MIN_CONSECUTIVE,
+    min_duration=DEFAULT_ONSET_MIN_DURATION,
+    require_stable_prediction=DEFAULT_ONSET_REQUIRE_STABLE_PREDICTION,
     detection_start_s=None,
 ):
     """Scan validation trials for stimulus identity without using onset at test time."""
@@ -674,11 +683,19 @@ def evaluate_participant_stimulus_onset_scan(
         scan_rows,
         threshold_window=threshold_window,
         threshold_quantile=threshold_quantile,
+        threshold_method=threshold_method,
+        min_consecutive=min_consecutive,
+        min_duration=min_duration,
+        require_stable_prediction=require_stable_prediction,
     )
     event_rows = _stimulus_onset_event_rows_from_reptrace(
         scan_rows,
         threshold_window=threshold_window,
         threshold_quantile=threshold_quantile,
+        threshold_method=threshold_method,
+        min_consecutive=min_consecutive,
+        min_duration=min_duration,
+        require_stable_prediction=require_stable_prediction,
         detection_start_s=detection_start_s,
     )
     return scan_rows, event_rows
@@ -697,6 +714,10 @@ def export_stimulus_onset_scan(
     train_window_center=DEFAULT_ONSET_SCAN_TRAIN_WINDOW_CENTER,
     threshold_window=DEFAULT_ONSET_THRESHOLD_WINDOW,
     threshold_quantile=DEFAULT_ONSET_THRESHOLD_QUANTILE,
+    threshold_method=DEFAULT_ONSET_THRESHOLD_METHOD,
+    min_consecutive=DEFAULT_ONSET_MIN_CONSECUTIVE,
+    min_duration=DEFAULT_ONSET_MIN_DURATION,
+    require_stable_prediction=DEFAULT_ONSET_REQUIRE_STABLE_PREDICTION,
     detection_start_s=None,
     progress=None,
 ):
@@ -718,6 +739,10 @@ def export_stimulus_onset_scan(
             train_window_center=train_window_center,
             threshold_window=threshold_window,
             threshold_quantile=threshold_quantile,
+            threshold_method=threshold_method,
+            min_consecutive=min_consecutive,
+            min_duration=min_duration,
+            require_stable_prediction=require_stable_prediction,
             detection_start_s=detection_start_s,
         )
         scan_rows.extend(participant_scan_rows)
@@ -746,6 +771,10 @@ def summarize_stimulus_onset_scan(rows):
             "variant",
             "transfer_direction",
             "train_window_center_s",
+            "threshold_method",
+            "min_consecutive",
+            "min_duration_s",
+            "require_stable_prediction",
             "scan_window_center_s",
             "classifier",
             "components_pca",
@@ -778,6 +807,10 @@ def summarize_stimulus_onset_scan(rows):
                 "threshold_quantile": group_rows[0].get("threshold_quantile", np.nan),
                 "threshold_window_start_s": group_rows[0].get("threshold_window_start_s", np.nan),
                 "threshold_window_stop_s": group_rows[0].get("threshold_window_stop_s", np.nan),
+                "threshold_method": group_rows[0].get("threshold_method", ""),
+                "min_consecutive": group_rows[0].get("min_consecutive", np.nan),
+                "min_duration_s": group_rows[0].get("min_duration_s", np.nan),
+                "require_stable_prediction": group_rows[0].get("require_stable_prediction", False),
                 "chance_accuracy": group_rows[0].get("chance_accuracy", np.nan),
                 "chance_percent": group_rows[0].get("chance_percent", np.nan),
             }
@@ -796,6 +829,10 @@ def summarize_stimulus_onset_events(rows):
             "variant",
             "transfer_direction",
             "train_window_center_s",
+            "threshold_method",
+            "min_consecutive",
+            "min_duration_s",
+            "require_stable_prediction",
             "classifier",
             "components_pca",
             "frequency_low_hz",
@@ -832,6 +869,10 @@ def summarize_stimulus_onset_events(rows):
                 "threshold_quantile": group_rows[0].get("threshold_quantile", np.nan),
                 "threshold_window_start_s": group_rows[0].get("threshold_window_start_s", np.nan),
                 "threshold_window_stop_s": group_rows[0].get("threshold_window_stop_s", np.nan),
+                "threshold_method": group_rows[0].get("threshold_method", ""),
+                "min_consecutive": group_rows[0].get("min_consecutive", np.nan),
+                "min_duration_s": group_rows[0].get("min_duration_s", np.nan),
+                "require_stable_prediction": group_rows[0].get("require_stable_prediction", False),
             }
         )
         summary_rows.append(summary_row)
@@ -989,7 +1030,16 @@ def _stimulus_score_observation_frame(scan_rows):
     return frame
 
 
-def _annotate_stimulus_onset_scan_with_reptrace(scan_rows, *, threshold_window, threshold_quantile):
+def _annotate_stimulus_onset_scan_with_reptrace(
+    scan_rows,
+    *,
+    threshold_window,
+    threshold_quantile,
+    threshold_method=DEFAULT_ONSET_THRESHOLD_METHOD,
+    min_consecutive=DEFAULT_ONSET_MIN_CONSECUTIVE,
+    min_duration=DEFAULT_ONSET_MIN_DURATION,
+    require_stable_prediction=DEFAULT_ONSET_REQUIRE_STABLE_PREDICTION,
+):
     if not scan_rows:
         return []
 
@@ -1000,13 +1050,37 @@ def _annotate_stimulus_onset_scan_with_reptrace(scan_rows, *, threshold_window, 
         threshold_window=threshold_window,
         threshold_quantile=threshold_quantile,
         score_column="stimulus_score",
+        threshold_method=threshold_method,
+        min_consecutive=min_consecutive,
+        min_duration=min_duration,
+        require_stable_prediction=require_stable_prediction,
     )
     thresholded["threshold_window_start_s"] = thresholded["threshold_window_start"]
     thresholded["threshold_window_stop_s"] = thresholded["threshold_window_stop"]
-    return thresholded[original_columns].to_dict(orient="records")
+    thresholded["min_consecutive"] = int(min_consecutive)
+    thresholded["min_duration_s"] = min_duration if min_duration is not None else np.nan
+    thresholded["require_stable_prediction"] = bool(require_stable_prediction)
+    metadata_columns = [
+        "threshold_method",
+        "min_consecutive",
+        "min_duration_s",
+        "require_stable_prediction",
+    ]
+    output_columns = original_columns + [column for column in metadata_columns if column not in original_columns]
+    return thresholded[output_columns].to_dict(orient="records")
 
 
-def _stimulus_onset_event_rows_from_reptrace(scan_rows, *, threshold_window, threshold_quantile, detection_start_s=None):
+def _stimulus_onset_event_rows_from_reptrace(
+    scan_rows,
+    *,
+    threshold_window,
+    threshold_quantile,
+    threshold_method=DEFAULT_ONSET_THRESHOLD_METHOD,
+    min_consecutive=DEFAULT_ONSET_MIN_CONSECUTIVE,
+    min_duration=DEFAULT_ONSET_MIN_DURATION,
+    require_stable_prediction=DEFAULT_ONSET_REQUIRE_STABLE_PREDICTION,
+    detection_start_s=None,
+):
     if not scan_rows:
         return []
 
@@ -1016,6 +1090,10 @@ def _stimulus_onset_event_rows_from_reptrace(scan_rows, *, threshold_window, thr
         threshold_window=threshold_window,
         threshold_quantile=threshold_quantile,
         score_column="stimulus_score",
+        threshold_method=threshold_method,
+        min_consecutive=min_consecutive,
+        min_duration=min_duration,
+        require_stable_prediction=require_stable_prediction,
         detection_start=detection_start_s,
     )
     reference_rows = observations.sort_values(["sequence_id", "time"]).groupby("sequence_id", sort=True).first().to_dict(orient="index")
@@ -1024,6 +1102,9 @@ def _stimulus_onset_event_rows_from_reptrace(scan_rows, *, threshold_window, thr
 
 def _stimulus_onset_event_row_from_reptrace(reference_row, event, detection_start_s):
     detected = bool(event["detected"])
+    min_duration = event.get("min_duration", np.nan)
+    if min_duration is None:
+        min_duration = np.nan
     return {
         "participant": reference_row["participant"],
         "variant": reference_row["variant"],
@@ -1050,6 +1131,14 @@ def _stimulus_onset_event_row_from_reptrace(reference_row, event, detection_star
         "threshold_quantile": event["threshold_quantile"],
         "threshold_window_start_s": event["threshold_window_start"],
         "threshold_window_stop_s": event["threshold_window_stop"],
+        "threshold_method": event.get("threshold_method", reference_row.get("threshold_method", "")),
+        "min_consecutive": event.get("min_consecutive", reference_row.get("min_consecutive", np.nan)),
+        "min_duration_s": min_duration,
+        "require_stable_prediction": bool(event.get("require_stable_prediction", reference_row.get("require_stable_prediction", False))),
+        "detection_run_length": event.get("detection_run_length", 0),
+        "detection_run_duration_s": event.get("detection_run_duration", np.nan),
+        "detection_run_stop_time_s": event.get("detection_run_stop_time", np.nan),
+        "stimulus_score_peak_in_run": event.get("score_peak_in_run", np.nan),
         "detection_start_s": detection_start_s if detection_start_s is not None else np.nan,
         "n_scanned_windows": event["n_time_points"],
         "classifier": reference_row["classifier"],

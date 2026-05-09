@@ -140,8 +140,19 @@ python scripts\export_stimulus_onset_scan.py `
   --train-window-center 0.175 `
   --scan-time-window=-0.4,0.8 `
   --window-step-s 0.025 `
+  --threshold-method max_run `
+  --min-consecutive 2 `
+  --min-duration 0.05 `
+  --require-stable-prediction `
+  --detection-start-s 0.0 `
   --output outputs\part2_stimulus_onset_scan.csv `
   --events-output outputs\part2_stimulus_onset_events.csv `
   --summary-output outputs\part2_stimulus_onset_scan_summary.csv `
   --event-summary-output outputs\part2_stimulus_onset_event_summary.csv
 ```
+
+`--threshold-method max_run` estimates thresholds from sequence-level baseline
+maxima under the same run criterion used by the detector. Combine it with
+`--min-consecutive`, `--min-duration`, and `--require-stable-prediction` to
+suppress one-bin spikes and class-flip artifacts while scanning many candidate
+time bins.

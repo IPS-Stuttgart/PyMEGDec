@@ -23,8 +23,13 @@ from pymegdec.stimulus_decoding import (
     DEFAULT_ONSET_SCAN_STEP_S,
     DEFAULT_ONSET_SCAN_TIME_WINDOW,
     DEFAULT_ONSET_SCAN_TRAIN_WINDOW_CENTER,
+    DEFAULT_ONSET_MIN_CONSECUTIVE,
+    DEFAULT_ONSET_MIN_DURATION,
+    DEFAULT_ONSET_REQUIRE_STABLE_PREDICTION,
+    DEFAULT_ONSET_THRESHOLD_METHOD,
     DEFAULT_ONSET_THRESHOLD_QUANTILE,
     DEFAULT_ONSET_THRESHOLD_WINDOW,
+    ONSET_THRESHOLD_METHODS,
     TRANSFER_DIRECTIONS,
     StimulusDecodingConfig,
     evaluate_participant_stimulus_decoding_diagnostics,
@@ -248,6 +253,30 @@ def _build_onset_scan_parser(prog: str | None = None) -> argparse.ArgumentParser
         "--threshold-window", type=_parse_time_window, default=DEFAULT_ONSET_THRESHOLD_WINDOW, help="Window-center range used to estimate the confidence threshold."
     )
     parser.add_argument("--threshold-quantile", type=float, default=DEFAULT_ONSET_THRESHOLD_QUANTILE, help="Quantile of threshold-window scores used as detection threshold.")
+    parser.add_argument(
+        "--threshold-method",
+        choices=ONSET_THRESHOLD_METHODS,
+        default=DEFAULT_ONSET_THRESHOLD_METHOD,
+        help="Threshold estimator: point uses pointwise baseline scores; max_run uses sequence-level baseline maxima under the run criteria.",
+    )
+    parser.add_argument(
+        "--min-consecutive",
+        type=int,
+        default=DEFAULT_ONSET_MIN_CONSECUTIVE,
+        help="Minimum number of adjacent above-threshold scan windows required for a detection.",
+    )
+    parser.add_argument(
+        "--min-duration",
+        type=float,
+        default=DEFAULT_ONSET_MIN_DURATION,
+        help="Optional minimum above-threshold run duration in seconds.",
+    )
+    parser.add_argument(
+        "--require-stable-prediction",
+        action="store_true",
+        default=DEFAULT_ONSET_REQUIRE_STABLE_PREDICTION,
+        help="Break onset runs when the predicted stimulus changes across adjacent above-threshold windows.",
+    )
     parser.add_argument("--detection-start-s", type=parse_float_or_inf, default=None, help="Optional earliest scan center considered for first detection.")
     _add_model_args(parser, include_transfer_direction=True)
     parser.add_argument("--output", default="outputs/stimulus_onset_scan.csv", help="Output CSV with one row per validation trial and scan window.")
@@ -262,6 +291,10 @@ def stimulus_onset_scan(argv: Sequence[str] | None = None, prog: str | None = No
     args = parser.parse_args(normalize_argv(argv))
     if not 0.0 <= args.threshold_quantile <= 1.0:
         parser.error("--threshold-quantile must be between 0 and 1.")
+    if args.min_consecutive < 1:
+        parser.error("--min-consecutive must be at least 1.")
+    if args.min_duration is not None and args.min_duration < 0:
+        parser.error("--min-duration must be non-negative.")
     data_folder = resolve_data_folder(args.data_folder)
     participants = _participants_or_error(parser, args.participants, data_folder)
     config = _base_config(args, window_centers=window_centers_from_range(args.scan_time_window, args.window_step_s))
@@ -276,6 +309,10 @@ def stimulus_onset_scan(argv: Sequence[str] | None = None, prog: str | None = No
         train_window_center=args.train_window_center,
         threshold_window=args.threshold_window,
         threshold_quantile=args.threshold_quantile,
+        threshold_method=args.threshold_method,
+        min_consecutive=args.min_consecutive,
+        min_duration=args.min_duration,
+        require_stable_prediction=args.require_stable_prediction,
         detection_start_s=args.detection_start_s,
         progress=lambda message: print(message, flush=True),
     )

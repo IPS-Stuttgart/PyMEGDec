@@ -15,6 +15,8 @@ from pymegdec.stimulus_decoding import (
     summarize_stimulus_prediction_diagnostics,
     summarize_stimulus_temporal_generalization,
     window_centers_from_range,
+    _annotate_stimulus_onset_scan_with_reptrace,
+    _stimulus_onset_event_rows_from_reptrace,
 )
 from tests.matlab_fixtures import cell_array
 
@@ -36,6 +38,47 @@ def _mat_data_matrix(labels, trial_values, time):
         "trial": cell_array([np.asarray([values], dtype=float) for values in trial_values]),
         "time": cell_array([np.asarray([time], dtype=float) for _ in trial_values]),
         "trialinfo": trialinfo,
+    }
+
+
+def _onset_scan_row(time, score, *, predicted_label=1, trial=0):
+    scan_window = (time - 0.0125, time + 0.0125)
+    correct = predicted_label == 1
+    return {
+        "participant": 1,
+        "variant": "without_null",
+        "transfer_direction": "main-to-cue",
+        "train_window_center_s": 0.175,
+        "train_window_start_s": 0.125,
+        "train_window_stop_s": 0.225,
+        "scan_window_center_s": time,
+        "scan_window_start_s": scan_window[0],
+        "scan_window_stop_s": scan_window[1],
+        "trial": trial,
+        "validation_trial_index": trial,
+        "validation_trial_number": trial + 1,
+        "true_label": 1,
+        "predicted_label": predicted_label,
+        "true_stimulus": 1,
+        "predicted_stimulus": predicted_label,
+        "true_stimulus_id": 1,
+        "predicted_stimulus_id": predicted_label,
+        "correct": correct,
+        "stimulus_score": score,
+        "score_threshold": np.nan,
+        "above_threshold": False,
+        "threshold_quantile": 0.0,
+        "threshold_window_start_s": -0.10,
+        "threshold_window_stop_s": -0.05,
+        "chance_accuracy": 0.5,
+        "chance_percent": 50.0,
+        "classifier": "multiclass-svm",
+        "classifier_param": 0.5,
+        "components_pca": 100,
+        "actual_components_pca": 1,
+        "pca_explained_variance_percent": 100.0,
+        "frequency_low_hz": 0.0,
+        "frequency_high_hz": float("inf"),
     }
 
 
@@ -242,6 +285,65 @@ class TestStimulusDecoding(unittest.TestCase):
         self.assertTrue(all(row["detected"] for row in event_rows))
         self.assertTrue(all(row["detection_window_center_s"] == 0.0 for row in event_rows))
         self.assertTrue(all(row["correct_detected_stimulus"] for row in event_rows))
+
+    def test_onset_scan_sustained_run_rejects_one_bin_spike(self):
+        scan_rows = [
+            _onset_scan_row(-0.10, 0.10),
+            _onset_scan_row(-0.05, 0.10),
+            _onset_scan_row(0.00, 2.00),
+            _onset_scan_row(0.05, 0.00),
+        ]
+
+        thresholded = _annotate_stimulus_onset_scan_with_reptrace(
+            scan_rows,
+            threshold_window=(-0.10, -0.05),
+            threshold_quantile=0.0,
+            threshold_method="max_run",
+            min_consecutive=2,
+        )
+        event_rows = _stimulus_onset_event_rows_from_reptrace(
+            thresholded,
+            threshold_window=(-0.10, -0.05),
+            threshold_quantile=0.0,
+            threshold_method="max_run",
+            min_consecutive=2,
+            detection_start_s=0.0,
+        )
+
+        self.assertEqual(len(event_rows), 1)
+        self.assertFalse(event_rows[0]["detected"])
+        self.assertEqual(event_rows[0]["min_consecutive"], 2)
+        self.assertEqual(event_rows[0]["threshold_method"], "max_run")
+
+    def test_onset_scan_stable_prediction_requirement_breaks_class_flips(self):
+        scan_rows = [
+            _onset_scan_row(-0.10, 0.10, predicted_label=1),
+            _onset_scan_row(-0.05, 0.10, predicted_label=1),
+            _onset_scan_row(0.00, 2.00, predicted_label=1),
+            _onset_scan_row(0.05, 2.00, predicted_label=2),
+        ]
+
+        thresholded = _annotate_stimulus_onset_scan_with_reptrace(
+            scan_rows,
+            threshold_window=(-0.10, -0.05),
+            threshold_quantile=0.0,
+            threshold_method="max_run",
+            min_consecutive=2,
+            require_stable_prediction=True,
+        )
+        event_rows = _stimulus_onset_event_rows_from_reptrace(
+            thresholded,
+            threshold_window=(-0.10, -0.05),
+            threshold_quantile=0.0,
+            threshold_method="max_run",
+            min_consecutive=2,
+            require_stable_prediction=True,
+            detection_start_s=0.0,
+        )
+
+        self.assertEqual(len(event_rows), 1)
+        self.assertFalse(event_rows[0]["detected"])
+        self.assertTrue(event_rows[0]["require_stable_prediction"])
 
     def test_summarize_stimulus_onset_scan_and_events(self):
         scan_rows = [
