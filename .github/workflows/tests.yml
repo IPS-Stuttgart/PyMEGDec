@@ -69,8 +69,9 @@ jobs:
   integration:
     runs-on: ubuntu-latest
     env:
-      DOWNLOAD_URL: ${{ secrets.DOWNLOAD_URL }}
-      DOWNLOAD_URL_CUE: ${{ secrets.DOWNLOAD_URL_CUE }}
+      BUSHMEG_WEBDAV_URL: ${{ secrets.BUSHMEG_WEBDAV_URL }}
+      BUSHMEG_DATA_KEY: ${{ secrets.BUSHMEG_DATA_KEY }}
+      BUSHMEG_DATA_PASSWORD: ${{ secrets.BUSHMEG_DATA_PASSWORD }}
       PYMEGDEC_DATA_DIR: data
       PYMEGDEC_REQUIRE_DATA: "1"
 
@@ -93,7 +94,7 @@ jobs:
       - name: Check data secrets
         id: data-secrets
         run: |
-          if [ -n "$DOWNLOAD_URL" ] && [ -n "$DOWNLOAD_URL_CUE" ]; then
+          if [ -n "$BUSHMEG_WEBDAV_URL" ] && [ -n "$BUSHMEG_DATA_KEY" ] && [ -n "$BUSHMEG_DATA_PASSWORD" ]; then
             echo "available=true" >> "$GITHUB_OUTPUT"
           else
             echo "available=false" >> "$GITHUB_OUTPUT"
@@ -105,15 +106,19 @@ jobs:
         uses: actions/cache@v5
         with:
           path: data
-          key: ${{ runner.os }}-meg-data
+          key: ${{ runner.os }}-bushmeg-sample-data-v2
 
-      - name: Download data
+      - name: Install rclone
+        if: steps.data-secrets.outputs.available == 'true' && steps.cache-data.outputs.cache-hit != 'true'
+        run: .github/scripts/install-rclone.sh
+
+      - name: Download sample MEG data
         if: steps.data-secrets.outputs.available == 'true' && steps.cache-data.outputs.cache-hit != 'true'
         run: |
-          mkdir -p data
-          cd data
-          wget -q "$DOWNLOAD_URL"
-          wget -q "$DOWNLOAD_URL_CUE"
+          python3 scripts/download_meg_data_files.py \
+            --source webdav-rclone \
+            --data-dir data \
+            --file-names Part2CueData.mat,Part2Data.mat
 
       - name: Run MEG data integration tests
         if: steps.data-secrets.outputs.available == 'true'
@@ -121,4 +126,4 @@ jobs:
 
       - name: Skip MEG data integration tests
         if: steps.data-secrets.outputs.available != 'true'
-        run: echo "Skipping integration tests because DOWNLOAD_URL and DOWNLOAD_URL_CUE are not configured."
+        run: echo "Skipping integration tests because BUSHMEG_WEBDAV_URL, BUSHMEG_DATA_KEY, and BUSHMEG_DATA_PASSWORD are not configured."

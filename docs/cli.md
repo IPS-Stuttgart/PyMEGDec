@@ -43,6 +43,8 @@ pymegdec alpha reaction-time --participants 2 --joined-output outputs/part2_alph
 
 ```bash
 pymegdec data download --data-dir data --env-name MEG_DATA_URL_LIST
+pymegdec data download --source webdav-rclone --data-dir data --file-indices 2,3
+pymegdec data download --source webdav-rclone --data-dir data --file-names Part2CueData.mat,Part2Data.mat
 ```
 
 ## Backward-compatible aliases

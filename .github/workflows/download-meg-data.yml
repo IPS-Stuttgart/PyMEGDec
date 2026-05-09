@@ -7,7 +7,7 @@ permissions:
   contents: read
 
 env:
-  DATA_CACHE_VERSION: v1
+  DATA_CACHE_VERSION: v2
   DATA_DIR: .cache/meg-data-all
 
 jobs:
@@ -25,11 +25,17 @@ jobs:
           path: ${{ env.DATA_DIR }}
           key: meg-data-all-${{ runner.os }}-${{ env.DATA_CACHE_VERSION }}
 
-      - name: Download MEG data files
+      - name: Install rclone
+        if: ${{ steps.meg-data-cache.outputs.cache-hit != 'true' }}
+        run: .github/scripts/install-rclone.sh
+
+      - name: Download MEG data files from OwnCloud WebDAV
         if: ${{ steps.meg-data-cache.outputs.cache-hit != 'true' }}
         env:
-          MEG_DATA_URL_LIST: ${{ secrets.MEG_DATA_URL_LIST }}
-        run: python3 scripts/download_meg_data_files.py --data-dir "${DATA_DIR}"
+          BUSHMEG_WEBDAV_URL: ${{ secrets.BUSHMEG_WEBDAV_URL }}
+          BUSHMEG_DATA_KEY: ${{ secrets.BUSHMEG_DATA_KEY }}
+          BUSHMEG_DATA_PASSWORD: ${{ secrets.BUSHMEG_DATA_PASSWORD }}
+        run: python3 scripts/download_meg_data_files.py --source webdav-rclone --data-dir "${DATA_DIR}"
 
       - name: Verify MEG data
         shell: bash

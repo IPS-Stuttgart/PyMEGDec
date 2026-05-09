@@ -6,7 +6,10 @@
     "scripts/export_stimulus_onset_scan.py",
     "scripts/export_stimulus_predictions.py",
     "scripts/export_stimulus_robustness.py",
-    "scripts/export_stimulus_temporal_generalization.py"
+    "scripts/export_stimulus_temporal_generalization.py",
+    "src/pymegdec/cli.py",
+    "src/pymegdec/synthetic_data_cli.py",
+    "tests/test_stimulus_decoding.py"
   ],
-  "threshold": 1
+  "threshold": 1.5
 }

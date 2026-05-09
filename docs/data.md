@@ -59,6 +59,17 @@ echo /path/to/MEG-Data > .pymegdec-data-dir
 pymegdec transfer --participant 2 --null-window-center nan
 ```
 
+Download the CI/sample subset from the private OwnCloud WebDAV share:
+
+```bash
+pymegdec data download --source webdav-rclone --data-dir data --file-names Part2CueData.mat,Part2Data.mat
+```
+
+The rclone-backed downloader reads `BUSHMEG_WEBDAV_URL`,
+`BUSHMEG_DATA_KEY`, and `BUSHMEG_DATA_PASSWORD` from the environment. Without
+`--file-indices` or `--file-names`, it downloads all files found recursively in
+the selected remote path.
+
 ## Participant ranges
 
 Commands that accept multiple participants use compact participant specs such as:
