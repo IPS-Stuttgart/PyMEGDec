@@ -239,7 +239,8 @@ jobs:
               frame = pd.read_csv(path)
               rows.append({
                   "setting": label,
-                  "participants": len(frame),
+                  "summary_rows": len(frame),
+                  "participants": frame["participant"].nunique() if "participant" in frame.columns else len(frame),
                   "false_alarm_rate_mean": frame["false_alarm_rate"].mean(),
                   "post_stimulus_detected_rate_mean": frame["post_stimulus_detected_rate"].mean(),
                   "correct_detection_rate_mean": frame["correct_detection_rate"].mean(),
