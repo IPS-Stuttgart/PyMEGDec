@@ -59,6 +59,11 @@ on:
         required: true
         default: "0.95"
         type: string
+      detection_start_s:
+        description: Optional earliest scan center considered for detection. Leave empty for true false-alarm benchmarking.
+        required: false
+        default: ""
+        type: string
       min_consecutive:
         description: Minimum adjacent above-threshold windows for robust detections.
         required: true
@@ -94,6 +99,7 @@ jobs:
       WINDOW_SIZE: ${{ inputs.window_size }}
       THRESHOLD_WINDOW: ${{ inputs.threshold_window }}
       THRESHOLD_QUANTILE: ${{ inputs.threshold_quantile }}
+      DETECTION_START_S: ${{ inputs.detection_start_s }}
       MIN_CONSECUTIVE: ${{ inputs.min_consecutive }}
       MIN_DURATION: ${{ inputs.min_duration }}
       RUN_POINT_BASELINE: ${{ inputs.run_point_baseline }}
@@ -161,45 +167,55 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p outputs
-          python scripts/export_stimulus_onset_scan.py \
-            --data-dir "${PYMEGDEC_ANALYSIS_DATA_DIR}" \
-            --participants "${PARTICIPANTS}" \
-            --train-window-center "${TRAIN_WINDOW_CENTER}" \
-            "--scan-time-window=${SCAN_TIME_WINDOW}" \
-            --window-step-s "${WINDOW_STEP_S}" \
-            --window-size "${WINDOW_SIZE}" \
-            "--threshold-window=${THRESHOLD_WINDOW}" \
-            --threshold-quantile "${THRESHOLD_QUANTILE}" \
-            --threshold-method max_run \
-            --min-consecutive "${MIN_CONSECUTIVE}" \
-            --min-duration "${MIN_DURATION}" \
-            --require-stable-prediction \
-            --detection-start-s 0.0 \
-            --output outputs/stimulus_onset_scan_robust.csv \
-            --events-output outputs/stimulus_onset_events_robust.csv \
-            --summary-output outputs/stimulus_onset_scan_summary_robust.csv \
+          args=(
+            python scripts/export_stimulus_onset_scan.py
+            --data-dir "${PYMEGDEC_ANALYSIS_DATA_DIR}"
+            --participants "${PARTICIPANTS}"
+            --train-window-center "${TRAIN_WINDOW_CENTER}"
+            "--scan-time-window=${SCAN_TIME_WINDOW}"
+            --window-step-s "${WINDOW_STEP_S}"
+            --window-size "${WINDOW_SIZE}"
+            "--threshold-window=${THRESHOLD_WINDOW}"
+            --threshold-quantile "${THRESHOLD_QUANTILE}"
+            --threshold-method max_run
+            --min-consecutive "${MIN_CONSECUTIVE}"
+            --min-duration "${MIN_DURATION}"
+            --require-stable-prediction
+            --output outputs/stimulus_onset_scan_robust.csv
+            --events-output outputs/stimulus_onset_events_robust.csv
+            --summary-output outputs/stimulus_onset_scan_summary_robust.csv
             --event-summary-output outputs/stimulus_onset_event_summary_robust.csv
+          )
+          if [[ -n "${DETECTION_START_S}" ]]; then
+            args+=(--detection-start-s "${DETECTION_START_S}")
+          fi
+          "${args[@]}"
 
       - name: Run pointwise baseline
         if: ${{ env.RUN_POINT_BASELINE == 'true' }}
         shell: bash
         run: |
           set -euo pipefail
-          python scripts/export_stimulus_onset_scan.py \
-            --data-dir "${PYMEGDEC_ANALYSIS_DATA_DIR}" \
-            --participants "${PARTICIPANTS}" \
-            --train-window-center "${TRAIN_WINDOW_CENTER}" \
-            "--scan-time-window=${SCAN_TIME_WINDOW}" \
-            --window-step-s "${WINDOW_STEP_S}" \
-            --window-size "${WINDOW_SIZE}" \
-            "--threshold-window=${THRESHOLD_WINDOW}" \
-            --threshold-quantile "${THRESHOLD_QUANTILE}" \
-            --threshold-method point \
-            --detection-start-s 0.0 \
-            --output outputs/stimulus_onset_scan_point.csv \
-            --events-output outputs/stimulus_onset_events_point.csv \
-            --summary-output outputs/stimulus_onset_scan_summary_point.csv \
+          args=(
+            python scripts/export_stimulus_onset_scan.py
+            --data-dir "${PYMEGDEC_ANALYSIS_DATA_DIR}"
+            --participants "${PARTICIPANTS}"
+            --train-window-center "${TRAIN_WINDOW_CENTER}"
+            "--scan-time-window=${SCAN_TIME_WINDOW}"
+            --window-step-s "${WINDOW_STEP_S}"
+            --window-size "${WINDOW_SIZE}"
+            "--threshold-window=${THRESHOLD_WINDOW}"
+            --threshold-quantile "${THRESHOLD_QUANTILE}"
+            --threshold-method point
+            --output outputs/stimulus_onset_scan_point.csv
+            --events-output outputs/stimulus_onset_events_point.csv
+            --summary-output outputs/stimulus_onset_scan_summary_point.csv
             --event-summary-output outputs/stimulus_onset_event_summary_point.csv
+          )
+          if [[ -n "${DETECTION_START_S}" ]]; then
+            args+=(--detection-start-s "${DETECTION_START_S}")
+          fi
+          "${args[@]}"
 
       - name: Summarize onset quality
         shell: bash
@@ -219,7 +235,8 @@ jobs:
               frame = pd.read_csv(path)
               rows.append({
                   "setting": label,
-                  "participants": len(frame),
+                  "summary_rows": len(frame),
+                  "participants": frame["participant"].nunique() if "participant" in frame.columns else len(frame),
                   "false_alarm_rate_mean": frame["false_alarm_rate"].mean(),
                   "post_stimulus_detected_rate_mean": frame["post_stimulus_detected_rate"].mean(),
                   "correct_detection_rate_mean": frame["correct_detection_rate"].mean(),
@@ -232,6 +249,11 @@ jobs:
 
           table = pd.DataFrame(rows)
           table.to_csv("outputs/stimulus_onset_quality_summary.csv", index=False)
+          detection_start = os.environ.get("DETECTION_START_S", "")
+          if detection_start:
+              mode_line = f"Both benchmark settings use `--detection-start-s {detection_start}`, so earlier detections are excluded consistently."
+          else:
+              mode_line = "No `--detection-start-s` floor is applied, so pre-stimulus first detections contribute to the false-alarm rate."
           if table.empty:
               table_block = "No summary rows produced."
           else:
@@ -241,7 +263,7 @@ jobs:
               "# Stimulus onset benchmark",
               "",
               "Lower false-alarm rate is better. Post-stimulus detection and correct-at-detection should stay meaningfully above chance.",
-              "Both benchmark settings use `--detection-start-s 0.0`, so first detections before stimulus onset are excluded consistently.",
+              mode_line,
               "",
               table_block,
               "",
