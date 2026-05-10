@@ -83,7 +83,7 @@ runs:
 
     - name: Restore MEG data cache
       id: restore
-      if: ${{ runner.environment != 'self-hosted' && steps.resolve.outputs.local-cache-hit != 'true' }}
+      if: ${{ steps.resolve.outputs.local-cache-hit != 'true' }}
       uses: actions/cache/restore@v5
       with:
         path: ${{ steps.resolve.outputs.cache-data-dir }}
@@ -97,12 +97,12 @@ runs:
         exit 1
 
     - name: Install rclone
-      if: ${{ inputs.download-on-miss == 'true' && steps.resolve.outputs.local-cache-hit != 'true' && (runner.environment == 'self-hosted' || steps.restore.outputs.cache-hit != 'true') }}
+      if: ${{ inputs.download-on-miss == 'true' && steps.resolve.outputs.local-cache-hit != 'true' && steps.restore.outputs.cache-hit != 'true' }}
       shell: bash
       run: .github/scripts/install-rclone.sh
 
     - name: Download MEG data files from OwnCloud WebDAV
-      if: ${{ inputs.download-on-miss == 'true' && steps.resolve.outputs.local-cache-hit != 'true' && (runner.environment == 'self-hosted' || steps.restore.outputs.cache-hit != 'true') }}
+      if: ${{ inputs.download-on-miss == 'true' && steps.resolve.outputs.local-cache-hit != 'true' && steps.restore.outputs.cache-hit != 'true' }}
       shell: bash
       env:
         CACHE_DATA_DIR: ${{ steps.resolve.outputs.cache-data-dir }}
@@ -139,7 +139,7 @@ runs:
         echo "Prepared MEG data at ${DATA_DIR}: ${main_count} main files, ${cue_count} cue files"
 
     - name: Save MEG data cache
-      if: ${{ runner.environment != 'self-hosted' && steps.resolve.outputs.local-cache-hit != 'true' && steps.restore.outputs.cache-hit != 'true' }}
+      if: ${{ steps.resolve.outputs.local-cache-hit != 'true' && steps.restore.outputs.cache-hit != 'true' }}
       uses: actions/cache/save@v5
       continue-on-error: true
       with:
