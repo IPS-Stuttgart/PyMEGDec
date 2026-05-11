@@ -16,17 +16,32 @@ if _SRC.exists():
     sys.path.insert(0, str(_SRC))
 
 from pymegdec.alpha_metrics import write_alpha_metrics_csv  # noqa: E402
-from pymegdec.stimulus_decoding import (  # noqa: E402
-    _annotate_stimulus_onset_scan_with_reptrace,
-    _stimulus_onset_event_rows_from_reptrace,
-    summarize_stimulus_onset_events,
-)
+from pymegdec.stimulus_decoding import _stimulus_onset_event_rows_from_reptrace, summarize_stimulus_onset_events  # noqa: E402
 
 GROUP_FIELDS = (
-    "participant", "variant", "transfer_direction", "train_window_center_s",
-    "threshold_method", "min_consecutive", "min_duration_s",
-    "require_stable_prediction", "classifier", "components_pca",
-    "frequency_low_hz", "frequency_high_hz",
+    "participant",
+    "variant",
+    "transfer_direction",
+    "train_window_center_s",
+    "threshold_method",
+    "min_consecutive",
+    "min_duration_s",
+    "require_stable_prediction",
+    "classifier",
+    "components_pca",
+    "frequency_low_hz",
+    "frequency_high_hz",
+)
+
+SCAN_GROUP_FIELDS = (
+    "participant",
+    "variant",
+    "transfer_direction",
+    "train_window_center_s",
+    "classifier",
+    "components_pca",
+    "frequency_low_hz",
+    "frequency_high_hz",
 )
 
 
@@ -68,6 +83,32 @@ def _stable_rows(rows: list[dict], fields: tuple[str, ...] = GROUP_FIELDS) -> li
             item[field] = _stable(item.get(field, ""))
         out.append(item)
     return out
+
+
+def _grouped_event_rows(
+    base_frame: pd.DataFrame,
+    *,
+    threshold_window: tuple[float, float],
+    threshold_quantile: float,
+    min_consecutive: int,
+    min_duration: float,
+    detection_start: float | None,
+) -> list[dict]:
+    grouped_events: list[dict] = []
+    for _, group in base_frame.groupby(list(SCAN_GROUP_FIELDS), sort=False, dropna=False):
+        grouped_events.extend(
+            _stimulus_onset_event_rows_from_reptrace(
+                group.to_dict(orient="records"),
+                threshold_window=threshold_window,
+                threshold_quantile=threshold_quantile,
+                threshold_method="point",
+                min_consecutive=min_consecutive,
+                min_duration=min_duration,
+                require_stable_prediction=False,
+                detection_start_s=detection_start,
+            )
+        )
+    return _stable_rows(grouped_events)
 
 
 def _mean(frame: pd.DataFrame, column: str) -> float:
@@ -155,29 +196,18 @@ def _parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     detection_start = _optional_float(args.detection_start_s)
-    base_rows = pd.read_csv(args.scan_input).to_dict(orient="records")
+    base_frame = pd.read_csv(args.scan_input)
     all_events, all_summaries, aggregate_rows = [], [], []
     by_key = {}
     for q, n, duration in itertools.product(args.threshold_quantiles, args.min_consecutives, args.min_durations):
-        annotated = _annotate_stimulus_onset_scan_with_reptrace(
-            [dict(row) for row in base_rows],
+        events = _grouped_event_rows(
+            base_frame,
             threshold_window=args.threshold_window,
             threshold_quantile=q,
-            threshold_method="point",
             min_consecutive=n,
             min_duration=duration,
-            require_stable_prediction=False,
+            detection_start=detection_start,
         )
-        events = _stable_rows(_stimulus_onset_event_rows_from_reptrace(
-            annotated,
-            threshold_window=args.threshold_window,
-            threshold_quantile=q,
-            threshold_method="point",
-            min_consecutive=n,
-            min_duration=duration,
-            require_stable_prediction=False,
-            detection_start_s=detection_start,
-        ))
         summaries = _stable_rows(summarize_stimulus_onset_events(events))
         row = _aggregate(summaries, q, n, duration, args.max_false_alarm_rate)
         by_key[(q, n, duration)] = (events, summaries)
