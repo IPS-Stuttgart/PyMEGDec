@@ -242,6 +242,32 @@ jobs:
           fi
           "${args[@]}"
 
+      - name: Run max-run operating-point sweep
+        shell: bash
+        run: |
+          set -euo pipefail
+          args=(
+            python scripts/export_stimulus_onset_operating_point_sweep.py
+            --scan-input outputs/stimulus_onset_scan_robust.csv
+            --threshold-method max_run
+            "--threshold-window=${THRESHOLD_WINDOW}"
+            --threshold-quantiles 0.955,0.96,0.965,0.97,0.975
+            --min-consecutives 2
+            --min-durations 0.05
+            --require-stable-prediction-values true,false
+            --max-false-alarm-rate 0.05
+            --events-output outputs/stimulus_onset_events_max_run_sweep.csv
+            --event-summary-output outputs/stimulus_onset_event_summary_max_run_sweep.csv
+            --summary-output outputs/stimulus_onset_operating_point_sweep_max_run.csv
+            --selected-output outputs/stimulus_onset_operating_point_selected_max_run.csv
+            --selected-events-output outputs/stimulus_onset_events_max_run_selected.csv
+            --selected-event-summary-output outputs/stimulus_onset_event_summary_max_run_selected.csv
+          )
+          if [[ -n "${DETECTION_START_S}" ]]; then
+            args+=(--detection-start-s "${DETECTION_START_S}")
+          fi
+          "${args[@]}"
+
       - name: Summarize onset quality
         shell: bash
         run: |
@@ -302,7 +328,7 @@ jobs:
                   return
               selected = frame.iloc[0].to_dict()
               rows.append({
-                  "setting": "point_sweep_selected",
+                  "setting": selected.get("setting", "selected_operating_point"),
                   "threshold_quantile": selected.get("threshold_quantile", np.nan),
                   "min_consecutive": selected.get("min_consecutive", np.nan),
                   "min_duration_s": selected.get("min_duration_s", np.nan),
@@ -321,6 +347,7 @@ jobs:
           add_event_summary("robust_max_run", "outputs/stimulus_onset_event_summary_robust.csv")
           add_event_summary("point_baseline", "outputs/stimulus_onset_event_summary_point.csv")
           add_selected_operating_point("outputs/stimulus_onset_operating_point_selected.csv")
+          add_selected_operating_point("outputs/stimulus_onset_operating_point_selected_max_run.csv")
 
           table = pd.DataFrame(rows)
           table.to_csv("outputs/stimulus_onset_quality_summary.csv", index=False)
@@ -336,17 +363,26 @@ jobs:
               table_block = f"```\n{plain_table}\n```"
 
           selected_line = ""
-          selected_path = Path("outputs/stimulus_onset_operating_point_selected.csv")
-          if selected_path.exists():
+          selected_lines = []
+          for selected_path in (
+              Path("outputs/stimulus_onset_operating_point_selected.csv"),
+              Path("outputs/stimulus_onset_operating_point_selected_max_run.csv"),
+          ):
+              if not selected_path.exists():
+                  continue
               selected_frame = pd.read_csv(selected_path)
-              if not selected_frame.empty:
-                  selected = selected_frame.iloc[0]
-                  selected_line = (
-                      "Selected point sweep operating point: "
-                      f"`threshold_quantile={selected['threshold_quantile']}`, "
-                      f"`min_consecutive={selected['min_consecutive']}`, "
-                      f"`min_duration_s={selected['min_duration_s']}`."
-                  )
+              if selected_frame.empty:
+                  continue
+              selected = selected_frame.iloc[0]
+              selected_lines.append(
+                  f"Selected `{selected['setting']}` operating point: "
+                  f"`threshold_quantile={selected['threshold_quantile']}`, "
+                  f"`min_consecutive={selected['min_consecutive']}`, "
+                  f"`min_duration_s={selected['min_duration_s']}`, "
+                  f"`require_stable_prediction={selected['require_stable_prediction']}`."
+              )
+          if selected_lines:
+              selected_line = "\n".join(selected_lines)
 
           text = "\n".join([
               "# Stimulus onset benchmark",
