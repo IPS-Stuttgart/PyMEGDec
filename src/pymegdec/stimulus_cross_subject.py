@@ -135,12 +135,14 @@ def evaluate_nested_cross_subject_stimulus(data_folder, participants, *, candida
     outer_rows = []
     selected_rows = []
     prediction_rows = []
+    inner_pair_cache: dict[tuple[int, tuple[int, int]], dict] = {}
     for test_participant in participants:
         outer_row, outer_inner_rows, selected_row, participant_predictions = _evaluate_nested_outer_fold(
             test_participant,
             participants,
             candidate_configs,
             feature_cache,
+            inner_pair_cache,
             progress=progress,
         )
         inner_rows.extend(outer_inner_rows)
@@ -443,11 +445,11 @@ def _load_feature_cache(data_folder, participants, candidate_configs, *, progres
     return feature_cache
 
 
-def _evaluate_nested_outer_fold(test_participant, participants, candidate_configs, feature_cache, *, progress=None):
+def _evaluate_nested_outer_fold(test_participant, participants, candidate_configs, feature_cache, inner_pair_cache, *, progress=None):
     if progress is not None:
         progress(f"START outer_test_participant={test_participant}")
     outer_train_participants = tuple(participant for participant in participants if participant != test_participant)
-    outer_inner_rows = _evaluate_nested_inner_rows(test_participant, outer_train_participants, candidate_configs, feature_cache)
+    outer_inner_rows = _evaluate_nested_inner_rows(test_participant, outer_train_participants, candidate_configs, feature_cache, inner_pair_cache)
     selected_row = _select_nested_candidate(outer_inner_rows)
     selected_config = candidate_configs[int(selected_row["selected_candidate_index"]) - 1]
     selected_feature_sets = feature_cache[_feature_cache_key(selected_config)]
@@ -473,22 +475,42 @@ def _evaluate_nested_outer_fold(test_participant, participants, candidate_config
     return outer_row, outer_inner_rows, selected_row, participant_predictions
 
 
-def _evaluate_nested_inner_rows(test_participant, outer_train_participants, candidate_configs, feature_cache):
+def _evaluate_nested_inner_rows(test_participant, outer_train_participants, candidate_configs, feature_cache, inner_pair_cache):
     inner_rows = []
     for candidate_index, candidate_config in enumerate(candidate_configs, start=1):
         feature_sets = feature_cache[_feature_cache_key(candidate_config)]
         for validation_participant in outer_train_participants:
-            train_sets = [feature_sets[participant] for participant in outer_train_participants if participant != validation_participant]
-            validation_set = feature_sets[validation_participant]
-            inner_row, _predictions = _evaluate_outer_fold(
-                train_sets,
-                validation_set,
-                config=candidate_config,
-                classifier_param=_resolved_classifier_param(candidate_config),
+            excluded_pair = tuple(sorted((int(test_participant), int(validation_participant))))
+            pair_rows = _cached_nested_pair_rows(candidate_index, candidate_config, excluded_pair, feature_sets, inner_pair_cache)
+            inner_rows.append(pair_rows[(int(test_participant), int(validation_participant))])
+    return inner_rows
+
+
+def _cached_nested_pair_rows(candidate_index, candidate_config, excluded_pair, feature_sets, inner_pair_cache):
+    cache_key = (int(candidate_index), tuple(excluded_pair))
+    if cache_key not in inner_pair_cache:
+        train_sets = [feature_set for participant, feature_set in feature_sets.items() if int(participant) not in excluded_pair]
+        fitted_model = _fit_outer_fold_model(train_sets, candidate_config, _resolved_classifier_param(candidate_config))
+        first_participant, second_participant = excluded_pair
+        pair_rows = {}
+        for outer_test_participant, validation_participant in (
+            (first_participant, second_participant),
+            (second_participant, first_participant),
+        ):
+            inner_row, _predictions = _score_outer_fold_model(
+                fitted_model,
+                feature_sets[validation_participant],
+                candidate_config,
                 include_predictions=False,
             )
-            inner_rows.append(_nested_inner_row(inner_row, test_participant, validation_participant, candidate_index))
-    return inner_rows
+            pair_rows[(outer_test_participant, validation_participant)] = _nested_inner_row(
+                inner_row,
+                outer_test_participant,
+                validation_participant,
+                candidate_index,
+            )
+        inner_pair_cache[cache_key] = pair_rows
+    return inner_pair_cache[cache_key]
 
 
 def _feature_cache_key(config):
@@ -579,12 +601,14 @@ def _add_selected_candidate_fields(row, selected_row):
 
 
 def _evaluate_outer_fold(train_sets, test_set, *, config, classifier_param, include_predictions=True):
+    fitted_model = _fit_outer_fold_model(train_sets, config, classifier_param)
+    return _score_outer_fold_model(fitted_model, test_set, config, include_predictions=include_predictions)
+
+
+def _fit_outer_fold_model(train_sets, config, classifier_param):
     train_features = np.vstack([_normalized_subject_features(feature_set, config) for feature_set in train_sets])
     train_labels_one_based = np.concatenate([feature_set.labels for feature_set in train_sets])
-    test_features = _normalized_subject_features(test_set, config)
-    test_labels_one_based = test_set.labels
     train_labels = train_labels_one_based - 1
-    test_labels = test_labels_one_based - 1
 
     train_window = _centered_window(config.window_center, config.window_size)
     model_bundle = fit_reptrace_window_model(
@@ -600,19 +624,37 @@ def _evaluate_outer_fold(train_sets, test_set, *, config, classifier_param, incl
         components_pca=config.components_pca,
         train_window=train_window,
     )
+    return {
+        "classifier_param": classifier_param,
+        "model_bundle": model_bundle,
+        "n_train_participants": len(train_sets),
+        "train_class_counts": Counter(train_labels_one_based.tolist()),
+        "train_labels": train_labels,
+        "train_participants": tuple(feature_set.participant for feature_set in train_sets),
+        "train_window": train_window,
+    }
+
+
+def _score_outer_fold_model(fitted_model, test_set, config, *, include_predictions=True):
+    model_bundle = fitted_model["model_bundle"]
+    test_features = _normalized_subject_features(test_set, config)
+    test_labels_one_based = test_set.labels
+    test_labels = test_labels_one_based - 1
     predictions, _scores = predict_reptrace_window_model(model_bundle, test_features)
     accuracy = float(accuracy_score(test_labels, predictions))
     balanced_accuracy = float(balanced_accuracy_score(test_labels, predictions))
     chance_accuracy = 1.0 / config.chance_classes
-    train_class_counts = Counter(train_labels_one_based.tolist())
+    train_class_counts = fitted_model["train_class_counts"]
     test_class_counts = Counter(test_labels_one_based.tolist())
-    train_participants = tuple(feature_set.participant for feature_set in train_sets)
+    train_participants = fitted_model["train_participants"]
+    train_labels = fitted_model["train_labels"]
+    train_window = fitted_model["train_window"]
 
     outer_row = {
         "outer_fold": int(test_set.participant),
         "test_participant": int(test_set.participant),
         "train_participants": ",".join(str(participant) for participant in train_participants),
-        "n_train_participants": len(train_sets),
+        "n_train_participants": fitted_model["n_train_participants"],
         "n_test_participants": 1,
         "window_center_s": config.window_center,
         "window_size_s": config.window_size,
@@ -636,7 +678,7 @@ def _evaluate_outer_fold(train_sets, test_set, *, config, classifier_param, incl
         "min_train_trials_per_class": int(min(train_class_counts.values())),
         "min_test_trials_per_class": int(min(test_class_counts.values())),
         "classifier": config.classifier,
-        "classifier_param": classifier_param,
+        "classifier_param": fitted_model["classifier_param"],
         "components_pca": config.components_pca,
         "actual_components_pca": model_bundle.actual_components_pca,
         "pca_explained_variance_percent": model_bundle.explained_variance_percent,
