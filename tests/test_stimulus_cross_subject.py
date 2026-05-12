@@ -4,6 +4,7 @@ from unittest.mock import patch
 
 import numpy as np
 
+from pymegdec import stimulus_cross_subject as cross_subject
 from pymegdec.stimulus_cross_subject import (
     CrossSubjectStimulusConfig,
     evaluate_cross_subject_stimulus_smoke,
@@ -139,7 +140,10 @@ class TestStimulusCrossSubject(unittest.TestCase):
             ),
         )
 
-        with patch("pymegdec.stimulus_cross_subject.sio.loadmat", side_effect=_loadmat_side_effect(data_by_participant)):
+        with (
+            patch("pymegdec.stimulus_cross_subject.sio.loadmat", side_effect=_loadmat_side_effect(data_by_participant)),
+            patch("pymegdec.stimulus_cross_subject.fit_reptrace_window_model", wraps=cross_subject.fit_reptrace_window_model) as fit_model,
+        ):
             artifacts = evaluate_nested_cross_subject_stimulus("unused", [1, 2, 3, 4], candidate_configs=candidate_configs)
 
         self.assertEqual(len(artifacts["outer"]), 4)
@@ -151,6 +155,7 @@ class TestStimulusCrossSubject(unittest.TestCase):
         self.assertEqual({row["balanced_accuracy"] for row in artifacts["outer"]}, {1.0})
         self.assertEqual(artifacts["group_summary"][0]["selection_mode"], "nested_loso")
         self.assertEqual(artifacts["group_summary"][0]["n_candidates"], 2)
+        self.assertEqual(fit_model.call_count, 16)
 
     def test_summarize_cross_subject_stimulus_smoke_signflip(self):
         config = CrossSubjectStimulusConfig(chance_classes=2, signflip_permutations=128)
