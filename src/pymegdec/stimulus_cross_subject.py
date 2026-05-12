@@ -39,7 +39,7 @@ NORMALIZATION_MODES = ("none", "subject_z", "subject_baseline_z")
 
 
 @dataclass(frozen=True)
-class CrossSubjectStimulusConfig:
+class CrossSubjectStimulusConfig:  # pylint: disable=too-many-instance-attributes
     """Parameters for the fixed-pipeline cross-subject stimulus smoke test."""
 
     window_center: float = DEFAULT_CROSS_SUBJECT_WINDOW_CENTER
@@ -50,6 +50,7 @@ class CrossSubjectStimulusConfig:
     classifier: str = DEFAULT_CROSS_SUBJECT_CLASSIFIER
     classifier_param: object = float("nan")
     components_pca: int | float = DEFAULT_CROSS_SUBJECT_COMPONENTS_PCA
+    max_trials_per_class_per_participant: int | None = None
     chance_classes: int = DEFAULT_CROSS_SUBJECT_CHANCE_CLASSES
     random_state: int | None = 0
     signflip_permutations: int = 10_000
@@ -70,6 +71,7 @@ class ParticipantFeatureSet:
     n_channels: int
     n_window_samples: int
     n_baseline_samples: int
+    max_trials_per_class_per_participant: int | None
 
 
 def evaluate_cross_subject_stimulus_smoke(data_folder, participants, *, config=None, progress=None):
@@ -178,6 +180,7 @@ def make_cross_subject_candidate_configs(  # pylint: disable=too-many-arguments
     classifiers=(DEFAULT_CROSS_SUBJECT_CLASSIFIER,),
     classifier_params=(float("nan"),),
     components_pca_values=(DEFAULT_CROSS_SUBJECT_COMPONENTS_PCA,),
+    max_trials_per_class_per_participant=None,
     chance_classes=DEFAULT_CROSS_SUBJECT_CHANCE_CLASSES,
     random_state=0,
     signflip_permutations=10_000,
@@ -195,6 +198,7 @@ def make_cross_subject_candidate_configs(  # pylint: disable=too-many-arguments
             classifier=classifier,
             classifier_param=classifier_param,
             components_pca=components_pca,
+            max_trials_per_class_per_participant=max_trials_per_class_per_participant,
             chance_classes=chance_classes,
             random_state=random_state,
             signflip_permutations=signflip_permutations,
@@ -217,18 +221,21 @@ def load_participant_stimulus_features(data_folder, participant, *, config=None)
     config = _normalized_config(config or CrossSubjectStimulusConfig())
     data_path = Path(resolve_data_folder(data_folder)) / f"Part{int(participant)}Data.mat"
     data = sio.loadmat(data_path)["data"][0]
-    labels = _trialinfo_labels(data)
+    all_labels = _trialinfo_labels(data)
+    trial_indices = _selected_trial_indices(all_labels, config.max_trials_per_class_per_participant)
+    labels = all_labels[trial_indices]
     features, n_window_samples = _extract_window_features(
         data,
         _centered_window(config.window_center, config.window_size),
         feature_mode=config.feature_mode,
+        trial_indices=trial_indices,
     )
     baseline_features = None
     baseline_feature_mean = None
     baseline_feature_std = None
     n_baseline_samples = 0
     if config.normalization == "subject_baseline_z":
-        baseline_feature_mean, baseline_feature_std, n_baseline_samples = _baseline_feature_statistics(data, config, n_window_samples)
+        baseline_feature_mean, baseline_feature_std, n_baseline_samples = _baseline_feature_statistics(data, config, n_window_samples, trial_indices)
     normalized_features = _normalize_features(features, config, baseline_feature_mean, baseline_feature_std)
     if labels.shape[0] != features.shape[0]:
         raise ValueError(f"Participant {participant} has {labels.shape[0]} labels but {features.shape[0]} feature rows.")
@@ -243,6 +250,7 @@ def load_participant_stimulus_features(data_folder, participant, *, config=None)
         n_channels=int(_trial_signal(data, 0).shape[0]),
         n_window_samples=int(n_window_samples),
         n_baseline_samples=int(n_baseline_samples),
+        max_trials_per_class_per_participant=config.max_trials_per_class_per_participant,
     )
 
 
@@ -272,6 +280,7 @@ def summarize_cross_subject_stimulus_smoke(outer_rows, *, config=None):
             "normalization": config.normalization,
             "classifier": config.classifier,
             "components_pca": config.components_pca,
+            "max_trials_per_class_per_participant": config.max_trials_per_class_per_participant,
             "chance_accuracy": chance,
             "chance_percent": 100.0 * chance,
             "accuracy_mean": float(np.mean(raw)),
@@ -307,6 +316,7 @@ def summarize_nested_cross_subject_stimulus(outer_rows, *, signflip_permutations
     selected_counts = Counter(int(row["selected_candidate_index"]) for row in outer_rows)
     classifier_counts = Counter(str(row["classifier"]) for row in outer_rows)
     window_counts = Counter(float(row["window_center_s"]) for row in outer_rows)
+    trial_cap_counts = Counter(str(row["max_trials_per_class_per_participant"]) for row in outer_rows)
     return [
         {
             "n_outer_folds": len(outer_rows),
@@ -317,6 +327,7 @@ def summarize_nested_cross_subject_stimulus(outer_rows, *, signflip_permutations
             "selected_candidate_counts": _format_counter(selected_counts),
             "selected_classifier_counts": _format_counter(classifier_counts),
             "selected_window_center_counts": _format_counter(window_counts),
+            "max_trials_per_class_per_participant_counts": _format_counter(trial_cap_counts),
             "chance_accuracy": chance,
             "chance_percent": 100.0 * chance,
             "accuracy_mean": float(np.mean(raw)),
@@ -353,6 +364,7 @@ def summarize_cross_subject_predictions(prediction_rows):
         "normalization",
         "classifier",
         "components_pca",
+        "max_trials_per_class_per_participant",
     )
     confusion = confusion_counts(
         frame,
@@ -524,6 +536,7 @@ def _feature_cache_key(config):
         float(config.baseline_window[1]),
         str(config.feature_mode),
         str(config.normalization),
+        config.max_trials_per_class_per_participant,
     )
 
 
@@ -586,6 +599,7 @@ def _select_nested_candidate(inner_rows):
                 "selected_classifier": example["classifier"],
                 "selected_classifier_param": example["classifier_param"],
                 "selected_components_pca": example["components_pca"],
+                "selected_max_trials_per_class_per_participant": example["max_trials_per_class_per_participant"],
             }
         )
     return max(
@@ -683,6 +697,7 @@ def _score_outer_fold_model(fitted_model, test_set, config, *, include_predictio
         "classifier": config.classifier,
         "classifier_param": fitted_model["classifier_param"],
         "components_pca": config.components_pca,
+        "max_trials_per_class_per_participant": config.max_trials_per_class_per_participant,
         "actual_components_pca": model_bundle.actual_components_pca,
         "pca_explained_variance_percent": model_bundle.explained_variance_percent,
         "n_channels": test_set.n_channels,
@@ -712,6 +727,7 @@ def _prediction_rows(test_set, test_labels, predictions, *, config, actual_compo
                 "normalization": config.normalization,
                 "classifier": config.classifier,
                 "components_pca": config.components_pca,
+                "max_trials_per_class_per_participant": config.max_trials_per_class_per_participant,
                 "actual_components_pca": actual_components_pca,
                 "trial": int(trial_idx),
                 "test_trial_index": int(trial_idx),
@@ -726,12 +742,12 @@ def _prediction_rows(test_set, test_labels, predictions, *, config, actual_compo
     return rows
 
 
-def _extract_window_features(data, time_window, *, feature_mode):
+def _extract_window_features(data, time_window, *, feature_mode, trial_indices=None):
     feature_mode = _normalize_feature_mode(feature_mode)
     time_vector = _time_vector(data, 0)
     mask = _time_mask(time_vector, time_window)
     features = []
-    for trial_idx in range(_count_trials(data)):
+    for trial_idx in _iter_trial_indices(data, trial_indices):
         signal = _trial_signal(data, trial_idx)
         window_signal = signal[:, mask]
         if feature_mode == "sensor_mean":
@@ -744,15 +760,15 @@ def _extract_window_features(data, time_window, *, feature_mode):
     return np.vstack(features), int(np.sum(mask))
 
 
-def _baseline_feature_statistics(data, config, n_window_samples):
+def _baseline_feature_statistics(data, config, n_window_samples, trial_indices):
     if config.feature_mode == "sensor_mean":
-        baseline_features, n_baseline_samples = _extract_window_features(data, config.baseline_window, feature_mode="sensor_mean")
+        baseline_features, n_baseline_samples = _extract_window_features(data, config.baseline_window, feature_mode="sensor_mean", trial_indices=trial_indices)
         mean = np.mean(baseline_features, axis=0, keepdims=True)
         std = np.std(baseline_features, axis=0, keepdims=True)
         return mean, _nonzero_std(std), n_baseline_samples
 
     if config.feature_mode == "sensor_flat":
-        channel_mean, channel_std, n_baseline_samples = _baseline_channel_statistics(data, config.baseline_window)
+        channel_mean, channel_std, n_baseline_samples = _baseline_channel_statistics(data, config.baseline_window, trial_indices)
         mean = np.tile(channel_mean, int(n_window_samples))[None, :]
         std = np.tile(channel_std, int(n_window_samples))[None, :]
         return mean, _nonzero_std(std), n_baseline_samples
@@ -760,14 +776,14 @@ def _baseline_feature_statistics(data, config, n_window_samples):
     raise ValueError(f"Unsupported feature_mode: {config.feature_mode}")
 
 
-def _baseline_channel_statistics(data, baseline_window):
+def _baseline_channel_statistics(data, baseline_window, trial_indices):
     time_vector = _time_vector(data, 0)
     mask = _time_mask(time_vector, baseline_window)
     n_channels = int(_trial_signal(data, 0).shape[0])
     sum_values = np.zeros(n_channels, dtype=float)
     sum_squares = np.zeros(n_channels, dtype=float)
     n_values = 0
-    for trial_idx in range(_count_trials(data)):
+    for trial_idx in _iter_trial_indices(data, trial_indices):
         baseline_signal = _trial_signal(data, trial_idx)[:, mask]
         sum_values += np.sum(baseline_signal, axis=1)
         sum_squares += np.sum(np.square(baseline_signal), axis=1)
@@ -775,6 +791,29 @@ def _baseline_channel_statistics(data, baseline_window):
     mean = sum_values / n_values
     variance = np.maximum(sum_squares / n_values - np.square(mean), 0.0)
     return mean, np.sqrt(variance), int(np.sum(mask))
+
+
+def _selected_trial_indices(labels, max_trials_per_class):
+    labels = np.asarray(labels).ravel()
+    if max_trials_per_class is None:
+        return np.arange(labels.shape[0], dtype=int)
+    max_trials_per_class = int(max_trials_per_class)
+    if max_trials_per_class <= 0:
+        raise ValueError("max_trials_per_class_per_participant must be positive.")
+
+    selected = []
+    counts: Counter[int] = Counter()
+    for index, label in enumerate(labels):
+        if counts[int(label)] < max_trials_per_class:
+            selected.append(index)
+            counts[int(label)] += 1
+    return np.asarray(selected, dtype=int)
+
+
+def _iter_trial_indices(data, trial_indices):
+    if trial_indices is None:
+        return range(_count_trials(data))
+    return (int(index) for index in np.asarray(trial_indices, dtype=int).ravel())
 
 
 def _trialinfo_labels(data):
@@ -920,6 +959,7 @@ def _normalized_config(config):
         classifier=config.classifier,
         classifier_param=config.classifier_param,
         components_pca=config.components_pca,
+        max_trials_per_class_per_participant=_normalize_trial_cap(config.max_trials_per_class_per_participant),
         chance_classes=config.chance_classes,
         random_state=config.random_state,
         signflip_permutations=config.signflip_permutations,
@@ -935,6 +975,15 @@ def _normalized_candidate_configs(candidate_configs):
     if len(chance_classes) != 1:
         raise ValueError("All nested candidate configurations must use the same chance_classes value.")
     return normalized_configs
+
+
+def _normalize_trial_cap(value):
+    if value is None:
+        return None
+    value = int(value)
+    if value <= 0:
+        raise ValueError("max_trials_per_class_per_participant must be positive.")
+    return value
 
 
 def _normalize_feature_mode(value):

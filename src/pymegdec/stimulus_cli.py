@@ -246,6 +246,12 @@ def _build_cross_subject_smoke_parser(prog: str | None = None) -> argparse.Argum
     parser.add_argument("--classifier", default=DEFAULT_CROSS_SUBJECT_CLASSIFIER, help="Classifier name.")
     parser.add_argument("--classifier-param", default=None, help="Classifier parameter value, JSON, Python literal, numeric value, or nan.")
     parser.add_argument("--components-pca", type=parse_int_or_inf, default=DEFAULT_CROSS_SUBJECT_COMPONENTS_PCA, help="Number of PCA components, or inf.")
+    parser.add_argument(
+        "--max-trials-per-class-per-participant",
+        type=int,
+        default=None,
+        help="Optional deterministic cap on trials per stimulus class and participant for quick screening.",
+    )
     parser.add_argument("--chance-classes", type=int, default=DEFAULT_CROSS_SUBJECT_CHANCE_CLASSES, help="Number of stimulus classes used for chance level.")
     parser.add_argument("--random-state", type=int, default=0, help="Random state passed to the classifier.")
     parser.add_argument("--signflip-permutations", type=int, default=10000, help="Monte Carlo sign-flip permutations for the group summary.")
@@ -274,6 +280,7 @@ def stimulus_cross_subject_smoke(argv: Sequence[str] | None = None, prog: str | 
         classifier=args.classifier,
         classifier_param=parse_classifier_param(args.classifier_param),
         components_pca=args.components_pca,
+        max_trials_per_class_per_participant=args.max_trials_per_class_per_participant,
         chance_classes=args.chance_classes,
         random_state=args.random_state,
         signflip_permutations=args.signflip_permutations,
@@ -343,6 +350,12 @@ def _build_cross_subject_nested_parser(prog: str | None = None) -> argparse.Argu
         default=(DEFAULT_CROSS_SUBJECT_COMPONENTS_PCA,),
         help="Comma-separated PCA component counts, or inf.",
     )
+    parser.add_argument(
+        "--max-trials-per-class-per-participant",
+        type=int,
+        default=None,
+        help="Optional deterministic cap on trials per stimulus class and participant for quick nested screening.",
+    )
     parser.add_argument("--chance-classes", type=int, default=DEFAULT_CROSS_SUBJECT_CHANCE_CLASSES, help="Number of stimulus classes used for chance level.")
     parser.add_argument("--random-state", type=int, default=0, help="Random state passed to classifiers.")
     parser.add_argument("--signflip-permutations", type=int, default=10000, help="Monte Carlo sign-flip permutations for the group summary.")
@@ -373,6 +386,7 @@ def stimulus_cross_subject_nested(argv: Sequence[str] | None = None, prog: str |
         classifiers=args.classifiers,
         classifier_params=args.classifier_params,
         components_pca_values=args.components_pca_values,
+        max_trials_per_class_per_participant=args.max_trials_per_class_per_participant,
         chance_classes=args.chance_classes,
         random_state=args.random_state,
         signflip_permutations=args.signflip_permutations,

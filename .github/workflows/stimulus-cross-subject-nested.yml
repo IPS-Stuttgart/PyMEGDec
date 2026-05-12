@@ -74,6 +74,11 @@ on:
         required: true
         default: "64"
         type: string
+      max_trials_per_class_per_participant:
+        description: Optional trial cap per stimulus class and participant. Use an empty value for all trials.
+        required: false
+        default: "10"
+        type: string
 
 permissions:
   contents: read
@@ -96,6 +101,7 @@ jobs:
       CLASSIFIERS: ${{ inputs.classifiers }}
       CLASSIFIER_PARAMS: ${{ inputs.classifier_params }}
       COMPONENTS_PCA_VALUES: ${{ inputs.components_pca_values }}
+      MAX_TRIALS_PER_CLASS_PER_PARTICIPANT: ${{ inputs.max_trials_per_class_per_participant }}
       MAIN_FILE_NAMES: >-
         Part1Data.mat,Part2Data.mat,Part3Data.mat,Part4Data.mat,Part6Data.mat,
         Part8Data.mat,Part9Data.mat,Part10Data.mat,Part13Data.mat,Part14Data.mat,
@@ -144,24 +150,30 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p outputs
-          python scripts/export_stimulus_cross_subject_nested.py \
-            --data-dir "${DATA_DIR}" \
-            --participants "${PARTICIPANTS}" \
-            --window-centers "${WINDOW_CENTERS}" \
-            --window-size "${WINDOW_SIZE}" \
-            --baseline-window "${BASELINE_WINDOW}" \
-            --feature-modes "${FEATURE_MODES}" \
-            --normalizations "${NORMALIZATIONS}" \
-            --classifiers "${CLASSIFIERS}" \
-            --classifier-params "${CLASSIFIER_PARAMS}" \
-            --components-pca-values "${COMPONENTS_PCA_VALUES}" \
-            --outer-output outputs/stimulus_cross_subject_nested_outer.csv \
-            --summary-output outputs/stimulus_cross_subject_nested_group_summary.csv \
-            --inner-validation-output outputs/stimulus_cross_subject_nested_inner_validation.csv \
-            --selected-output outputs/stimulus_cross_subject_nested_selected.csv \
-            --predictions-output outputs/stimulus_cross_subject_nested_predictions.csv \
-            --confusion-output outputs/stimulus_cross_subject_nested_confusion.csv \
+          args=(
+            python scripts/export_stimulus_cross_subject_nested.py
+            --data-dir "${DATA_DIR}"
+            --participants "${PARTICIPANTS}"
+            --window-centers "${WINDOW_CENTERS}"
+            --window-size "${WINDOW_SIZE}"
+            --baseline-window "${BASELINE_WINDOW}"
+            --feature-modes "${FEATURE_MODES}"
+            --normalizations "${NORMALIZATIONS}"
+            --classifiers "${CLASSIFIERS}"
+            --classifier-params "${CLASSIFIER_PARAMS}"
+            --components-pca-values "${COMPONENTS_PCA_VALUES}"
+            --outer-output outputs/stimulus_cross_subject_nested_outer.csv
+            --summary-output outputs/stimulus_cross_subject_nested_group_summary.csv
+            --inner-validation-output outputs/stimulus_cross_subject_nested_inner_validation.csv
+            --selected-output outputs/stimulus_cross_subject_nested_selected.csv
+            --predictions-output outputs/stimulus_cross_subject_nested_predictions.csv
+            --confusion-output outputs/stimulus_cross_subject_nested_confusion.csv
             --per-stimulus-output outputs/stimulus_cross_subject_nested_per_stimulus.csv
+          )
+          if [[ -n "${MAX_TRIALS_PER_CLASS_PER_PARTICIPANT}" ]]; then
+            args+=(--max-trials-per-class-per-participant "${MAX_TRIALS_PER_CLASS_PER_PARTICIPANT}")
+          fi
+          "${args[@]}"
 
       - name: Append workflow summary
         shell: bash
@@ -182,6 +194,7 @@ jobs:
               "| --- | ---: |",
               f"| outer folds | {summary['n_outer_folds']} |",
               f"| candidates | {summary['n_candidates']} |",
+              f"| trial cap counts | {summary.get('max_trials_per_class_per_participant_counts', '')} |",
               f"| chance | {float(summary['chance_percent']):.2f}% |",
               f"| mean balanced accuracy | {float(summary['balanced_percent_mean']):.2f}% |",
               f"| balanced accuracy SEM | {float(summary['balanced_percent_sem']):.2f}% |",

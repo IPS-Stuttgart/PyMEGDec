@@ -80,6 +80,24 @@ class TestStimulusCrossSubject(unittest.TestCase):
         self.assertTrue(np.allclose(feature_set.baseline_feature_mean[0, :2], feature_set.baseline_feature_mean[0, 2:]))
         self.assertTrue(np.allclose(feature_set.baseline_feature_std[0, :2], feature_set.baseline_feature_std[0, 2:]))
 
+    def test_load_participant_stimulus_features_can_cap_trials_per_class(self):
+        data_by_participant = {1: _mat_data([1, 2, 1, 2, 1, 2], [-1.0, 1.0, -0.9, 0.9, -0.8, 0.8])}
+        config = CrossSubjectStimulusConfig(
+            window_center=0.2,
+            window_size=0.1,
+            normalization="none",
+            components_pca=float("inf"),
+            max_trials_per_class_per_participant=2,
+            chance_classes=2,
+        )
+
+        with patch("pymegdec.stimulus_cross_subject.sio.loadmat", side_effect=_loadmat_side_effect(data_by_participant)):
+            feature_set = load_participant_stimulus_features("unused", 1, config=config)
+
+        self.assertEqual(feature_set.labels.tolist(), [1, 2, 1, 2])
+        self.assertEqual(feature_set.features.shape[0], 4)
+        self.assertEqual(feature_set.max_trials_per_class_per_participant, 2)
+
     def test_evaluate_cross_subject_stimulus_smoke(self):
         data_by_participant = {
             1: _mat_data([1, 2, 1, 2], [-1.2, 1.2, -1.1, 1.1]),
