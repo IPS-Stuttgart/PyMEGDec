@@ -1,0 +1,149 @@
+name: Cache UCL RDR navigation data
+#checkov:skip=CKV_GHA_7:Manual workflow inputs are constrained to cache location and dataset filters.
+
+on:
+  workflow_dispatch:
+    inputs:
+      cache_dir:
+        description: Persistent dataset cache directory on the self-hosted runner.
+        required: true
+        default: "$HOME/.cache/datasets/ucl-rdr-31277950"
+        type: string
+      participants:
+        description: Participant ids to cache, e.g. all or 1-4,6,8,9,10,13-27.
+        required: true
+        default: all
+        type: string
+      file_groups:
+        description: "File groups to cache: all, behavioural, cfix, taskkeys, mat, dat, or comma-separated combinations."
+        required: true
+        default: all
+        type: string
+      verify_existing:
+        description: MD5-check already cached files before skipping them.
+        required: true
+        default: false
+        type: boolean
+      dry_run:
+        description: Only write the selected-file manifest; do not download.
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ucl-rdr-data-cache
+  cancel-in-progress: false
+
+jobs:
+  cache-data:
+    name: Cache UCL RDR data
+    runs-on: [self-hosted, BehaviouralData]
+    timeout-minutes: 1440
+    env:
+      CACHE_DIR: ${{ inputs.cache_dir }}
+      PARTICIPANTS: ${{ inputs.participants }}
+      FILE_GROUPS: ${{ inputs.file_groups }}
+      VERIFY_EXISTING: ${{ inputs.verify_existing }}
+      DRY_RUN: ${{ inputs.dry_run }}
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+
+      - name: Show runner storage
+        shell: bash
+        run: |
+          set -euo pipefail
+          expanded_cache_dir="${CACHE_DIR/#\$HOME/${HOME}}"
+          expanded_cache_dir="${expanded_cache_dir/#\~/${HOME}}"
+          mkdir -p "${expanded_cache_dir}"
+          {
+            echo "# UCL RDR data cache"
+            echo ""
+            echo "Runner: ${RUNNER_NAME}"
+            echo "Cache directory: \`${expanded_cache_dir}\`"
+            echo ""
+            echo "## Disk before"
+            echo ""
+            echo '```text'
+            df -h "${expanded_cache_dir}"
+            echo '```'
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+      - name: Cache public UCL RDR dataset
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p outputs
+          args=(
+            --cache-dir "${CACHE_DIR}"
+            --participants "${PARTICIPANTS}"
+            --file-groups "${FILE_GROUPS}"
+            --manifest-output outputs/ucl_rdr_cache_manifest.csv
+            --summary-output outputs/ucl_rdr_cache_summary.json
+          )
+          if [[ "${VERIFY_EXISTING}" == "true" ]]; then
+            args+=(--verify-existing)
+          fi
+          if [[ "${DRY_RUN}" == "true" ]]; then
+            args+=(--dry-run)
+          fi
+          python scripts/cache_ucl_rdr_dataset.py "${args[@]}"
+
+      - name: Append cache summary
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -f outputs/ucl_rdr_cache_summary.json ]]; then
+            python - <<'PY' >> "${GITHUB_STEP_SUMMARY}"
+          import json
+          from pathlib import Path
+
+          summary = json.loads(Path("outputs/ucl_rdr_cache_summary.json").read_text(encoding="utf-8"))
+          print("")
+          print("## Cache result")
+          print("")
+          print("| metric | value |")
+          print("| --- | ---: |")
+          print(f"| selected files | {summary['selected_files']} |")
+          print(f"| selected size | {summary['selected_size_gb']:.2f} GB |")
+          print(f"| downloaded files | {summary['downloaded_files']} |")
+          print(f"| downloaded size | {summary['downloaded_size_gb']:.2f} GB |")
+          print(f"| cached files after run | {summary['cached_files_after_run']} |")
+          print(f"| missing/incomplete after run | {summary['missing_or_incomplete_after_run']} |")
+          print("")
+          print(f"DOI: `{summary['doi']}`")
+          print(f"Cache directory: `{summary['cache_dir']}`")
+          PY
+          fi
+
+          expanded_cache_dir="${CACHE_DIR/#\$HOME/${HOME}}"
+          expanded_cache_dir="${expanded_cache_dir/#\~/${HOME}}"
+          if [[ -d "${expanded_cache_dir}" ]]; then
+            {
+              echo ""
+              echo "## Disk after"
+              echo ""
+              echo '```text'
+              df -h "${expanded_cache_dir}"
+              du -sh "${expanded_cache_dir}" || true
+              echo '```'
+            } >> "${GITHUB_STEP_SUMMARY}"
+          fi
+
+      - name: Upload cache manifest
+        if: always()
+        uses: actions/upload-artifact@v5
+        with:
+          name: ucl-rdr-cache-manifest
+          path: outputs/ucl_rdr_cache_*.*
+          if-no-files-found: warn
