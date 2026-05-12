@@ -366,6 +366,22 @@ jobs:
               handle.write(text)
           PY
 
+      - name: Build onset decision summary
+        shell: bash
+        run: |
+          set -euo pipefail
+          python scripts/export_stimulus_onset_decision_summary.py \
+            --artifact-dir outputs \
+            --output-csv outputs/stimulus_onset_decision_summary.csv \
+            --output-markdown outputs/stimulus_onset_decision_summary.md \
+            --output-json outputs/stimulus_onset_decision_summary.json
+
+      - name: Append onset decision summary
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat outputs/stimulus_onset_decision_summary.md >> "${GITHUB_STEP_SUMMARY}"
+
       - name: Upload onset benchmark outputs
         uses: actions/upload-artifact@v7
         if: always()
