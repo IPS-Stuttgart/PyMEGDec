@@ -134,8 +134,8 @@ runs:
           mkdir -p "$(dirname "${DATA_DIR}")"
           ln -s "$(realpath "${CACHE_DATA_DIR}")" "${DATA_DIR}"
         fi
-        main_count="$(find "${DATA_DIR}" -name 'Part*Data.mat' ! -name 'Part*CueData.mat' | wc -l | tr -d ' ')"
-        cue_count="$(find "${DATA_DIR}" -name 'Part*CueData.mat' | wc -l | tr -d ' ')"
+        main_count="$(find -L "${DATA_DIR}" -name 'Part*Data.mat' ! -name 'Part*CueData.mat' | wc -l | tr -d ' ')"
+        cue_count="$(find -L "${DATA_DIR}" -name 'Part*CueData.mat' | wc -l | tr -d ' ')"
         if [ "${main_count}" -eq 0 ] || { [ "${{ inputs.require-cue-files }}" = "true" ] && [ "${cue_count}" -eq 0 ]; }; then
           echo "Prepared MEG data is incomplete at ${DATA_DIR}: ${main_count} main files, ${cue_count} cue files" >&2
           exit 1
