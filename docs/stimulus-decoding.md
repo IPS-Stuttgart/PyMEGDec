@@ -55,8 +55,14 @@ pymegdec stimulus cross-subject-nested \
   --normalizations subject_baseline_z \
   --classifiers multinomial-logistic,shrinkage-lda,multiclass-svm \
   --classifier-params default \
-  --components-pca-values 64
+  --components-pca-values 64 \
+  --max-trials-per-class-per-participant 10
 ```
+
+The trial cap is a deterministic screening option: it keeps the first `N`
+trials of each stimulus class for each participant, preserving nested LOSO
+while making candidate selection fast enough to iterate. Omit
+`--max-trials-per-class-per-participant` for the final all-trial benchmark.
 
 The nested outputs include untouched outer-fold scores, one row per inner
 validation fold and candidate, selected hyperparameters per outer fold, trial
