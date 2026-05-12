@@ -80,6 +80,9 @@ on:
 permissions:
   contents: read
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
 jobs:
   cross-subject-smoke:
     name: Cross-subject smoke
@@ -200,7 +203,7 @@ jobs:
           lines.extend(["", "## Worst held-out participants", "", "| participant | balanced accuracy | raw accuracy |", "| ---: | ---: | ---: |"])
           for row in worst:
               lines.append(f"| {row['test_participant']} | {100.0 * float(row['balanced_accuracy']):.2f}% | {100.0 * float(row['accuracy']):.2f}% |")
-          Path(__import__("os").environ["GITHUB_STEP_SUMMARY"]).write_text("\\n".join(lines) + "\\n", encoding="utf-8")
+          Path(__import__("os").environ["GITHUB_STEP_SUMMARY"]).write_text("\n".join(lines) + "\n", encoding="utf-8")
           PY
 
       - name: Upload cross-subject smoke outputs
