@@ -15,17 +15,27 @@ import json
 import os
 import re
 import shutil
-import subprocess
+import subprocess  # nosec B404
 import sys
+import urllib.parse
 import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable
+from typing import Any, Iterable, TypedDict
 
 
 DEFAULT_ARTICLE_ID = "31277950"
 DEFAULT_VERSION = "1"
 DEFAULT_CACHE_DIR = "$HOME/.cache/datasets/ucl-rdr-31277950"
+
+
+def require_https_url(url: str) -> str:
+    """Return ``url`` after verifying that it uses HTTPS."""
+
+    parsed = urllib.parse.urlparse(url)
+    if parsed.scheme != "https":
+        raise ValueError(f"Only HTTPS URLs are supported: {url!r}")
+    return url
 
 
 @dataclass(frozen=True)
@@ -39,6 +49,22 @@ class DatasetFile:
     md5: str
     group: str
     participant: int | None
+
+
+class ManifestRow(TypedDict):
+    """One row written to the CSV manifest and JSON summary."""
+
+    name: str
+    file_id: int
+    group: str
+    participant: int | str
+    size: int
+    size_gb: str
+    md5: str
+    status: str
+    downloaded: str
+    path: str
+    download_url: str
 
 
 def parse_participants(spec: str) -> set[int] | None:
@@ -86,11 +112,12 @@ def parse_file_groups(spec: str) -> set[str]:
     return groups
 
 
-def fetch_metadata(article_id: str, version: str) -> dict:
+def fetch_metadata(article_id: str, version: str) -> dict[str, Any]:
     """Fetch public Figshare/UCL RDR metadata."""
 
-    url = f"https://api.figshare.com/v2/articles/{article_id}/versions/{version}"
-    with urllib.request.urlopen(url) as response:
+    url = require_https_url(f"https://api.figshare.com/v2/articles/{article_id}/versions/{version}")
+    # URL is an HTTPS Figshare API endpoint built from fixed path components.
+    with urllib.request.urlopen(url) as response:  # nosec B310
         return json.load(response)
 
 
@@ -102,7 +129,7 @@ def expand_cache_dir(path_text: str) -> Path:
     return Path(os.path.expandvars(path_text)).expanduser().resolve()
 
 
-def classify_file(raw_file: dict) -> DatasetFile:
+def classify_file(raw_file: dict[str, Any]) -> DatasetFile:
     """Convert a Figshare file metadata dict into a typed file record."""
 
     name = raw_file["name"]
@@ -120,7 +147,7 @@ def classify_file(raw_file: dict) -> DatasetFile:
         file_id=int(raw_file["id"]),
         name=name,
         size=int(raw_file["size"]),
-        download_url=raw_file["download_url"],
+        download_url=require_https_url(str(raw_file["download_url"])),
         md5=str(raw_file.get("computed_md5") or raw_file.get("supplied_md5") or ""),
         group=group,
         participant=participant,
@@ -145,7 +172,7 @@ def select_files(files: Iterable[DatasetFile], participants: set[int] | None, gr
 def md5sum(path: Path) -> str:
     """Compute an MD5 checksum using chunked reads."""
 
-    hasher = hashlib.md5()
+    hasher = hashlib.md5(usedforsecurity=False)
     with path.open("rb") as handle:
         for chunk in iter(lambda: handle.read(1024 * 1024), b""):
             hasher.update(chunk)
@@ -192,12 +219,14 @@ def run_curl(curl_path: str, item: DatasetFile, destination: Path, retries: int)
         "-",
         "-o",
         str(destination),
+        "--",
         item.download_url,
     ]
-    subprocess.run(command, check=True)
+    # Command is an argument list and shell=False by default.
+    subprocess.run(command, check=True)  # nosec B603
 
 
-def write_manifest(path: Path, rows: list[dict[str, object]]) -> None:
+def write_manifest(path: Path, rows: list[ManifestRow]) -> None:
     """Write a compact CSV manifest."""
 
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -220,12 +249,12 @@ def write_manifest(path: Path, rows: list[dict[str, object]]) -> None:
         writer.writerows(rows)
 
 
-def write_summary(path: Path, metadata: dict, rows: list[dict[str, object]], cache_dir: Path, dry_run: bool) -> None:
+def write_summary(path: Path, metadata: dict[str, Any], rows: list[ManifestRow], cache_dir: Path, dry_run: bool) -> None:
     """Write a JSON summary for workflow step summaries and artifacts."""
 
     path.parent.mkdir(parents=True, exist_ok=True)
-    total_size = sum(int(row["size"]) for row in rows)
-    downloaded_size = sum(int(row["size"]) for row in rows if row["downloaded"] == "true")
+    total_size = sum(row["size"] for row in rows)
+    downloaded_size = sum(row["size"] for row in rows if row["downloaded"] == "true")
     cached_count = sum(1 for row in rows if row["status"] == "cached")
     summary = {
         "title": metadata.get("title"),
@@ -277,7 +306,7 @@ def main(argv: list[str] | None = None) -> int:
     if not selected_files:
         raise RuntimeError("No files matched the requested participant/file-group filters.")
 
-    rows: list[dict[str, object]] = []
+    rows: list[ManifestRow] = []
     verify_downloads = not args.no_verify_downloads
     print(f"Cache directory: {cache_dir}")
     print(f"Selected files: {len(selected_files)}")
