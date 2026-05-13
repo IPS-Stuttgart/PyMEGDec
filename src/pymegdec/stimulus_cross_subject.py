@@ -48,6 +48,8 @@ CROSS_SUBJECT_PREDICTION_GROUP_COLUMNS = (
     "classifier",
     "components_pca",
     "max_trials_per_class_per_participant",
+    "label_shuffle_control",
+    "label_shuffle_seed",
 )
 STIMULUS_METADATA_ID_COLUMNS = ("stimulus", "stimulus_id", "true_stimulus", "label", "image_id")
 
@@ -148,6 +150,8 @@ def evaluate_nested_cross_subject_stimulus(
     progress=None,
     existing_artifacts=None,
     after_outer_fold=None,
+    label_shuffle_control=False,
+    label_shuffle_seed=0,
 ):
     """Run nested LOSO model selection and evaluate each untouched outer participant once."""
 
@@ -181,6 +185,8 @@ def evaluate_nested_cross_subject_stimulus(
             feature_cache,
             inner_pair_cache,
             progress=progress,
+            label_shuffle_control=label_shuffle_control,
+            label_shuffle_seed=label_shuffle_seed,
         )
         inner_rows.extend(outer_inner_rows)
         outer_rows.append(outer_row)
@@ -378,12 +384,16 @@ def summarize_nested_cross_subject_stimulus(outer_rows, *, signflip_permutations
     components_pca_counts = _row_value_counts(outer_rows, "selected_components_pca", fallback_key="components_pca")
     trial_cap_counts = Counter(str(row["max_trials_per_class_per_participant"]) for row in outer_rows)
     winner_margins = _finite_metric_values(outer_rows, "selected_inner_winner_margin")
+    label_shuffle_control = _single_row_value(outer_rows, "label_shuffle_control", default=False)
+    label_shuffle_seed = _single_row_value(outer_rows, "label_shuffle_seed", default="")
     return [
         {
             "n_outer_folds": len(outer_rows),
             "n_test_participants": len(outer_rows),
             "selection_mode": "nested_loso",
             "selection_metric": DEFAULT_CROSS_SUBJECT_SELECTION_METRIC,
+            "label_shuffle_control": label_shuffle_control,
+            "label_shuffle_seed": label_shuffle_seed,
             "n_candidates": int(max(int(row["n_candidates"]) for row in outer_rows)),
             "selected_candidate_counts": _format_counter(selected_counts),
             "selected_classifier_counts": _format_counter(classifier_counts),
@@ -847,6 +857,8 @@ def export_nested_cross_subject_stimulus(  # pylint: disable=too-many-arguments
     write_incremental=False,
     outer_participants=None,
     progress=None,
+    label_shuffle_control=False,
+    label_shuffle_seed=0,
 ):
     """Run nested LOSO cross-subject decoding and write compact CSV artifacts."""
 
@@ -882,6 +894,8 @@ def export_nested_cross_subject_stimulus(  # pylint: disable=too-many-arguments
         progress=progress,
         existing_artifacts=existing_artifacts,
         after_outer_fold=write_outputs if write_incremental else None,
+        label_shuffle_control=label_shuffle_control,
+        label_shuffle_seed=label_shuffle_seed,
     )
     write_outputs(artifacts)
     return artifacts
@@ -905,7 +919,17 @@ def _load_feature_cache(data_folder, participants, candidate_configs, *, progres
     return feature_cache
 
 
-def _evaluate_nested_outer_fold(test_participant, participants, candidate_configs, feature_cache, inner_pair_cache, *, progress=None):
+def _evaluate_nested_outer_fold(
+    test_participant,
+    participants,
+    candidate_configs,
+    feature_cache,
+    inner_pair_cache,
+    *,
+    progress=None,
+    label_shuffle_control=False,
+    label_shuffle_seed=0,
+):
     if progress is not None:
         progress(f"START outer_test_participant={test_participant}")
     outer_train_participants = tuple(participant for participant in participants if participant != test_participant)
@@ -916,6 +940,8 @@ def _evaluate_nested_outer_fold(test_participant, participants, candidate_config
         feature_cache,
         inner_pair_cache,
         progress=progress,
+        label_shuffle_control=label_shuffle_control,
+        label_shuffle_seed=label_shuffle_seed,
     )
     selected_row = _select_nested_candidate(outer_inner_rows)
     selected_config = candidate_configs[int(selected_row["selected_candidate_index"]) - 1]
@@ -928,6 +954,8 @@ def _evaluate_nested_outer_fold(test_participant, participants, candidate_config
         config=selected_config,
         classifier_param=_resolved_classifier_param(selected_config),
         include_predictions=True,
+        label_shuffle_seed=label_shuffle_seed if label_shuffle_control else None,
+        label_shuffle_context=(int(test_participant), int(selected_row["selected_candidate_index"]), 0),
     )
     _add_selected_candidate_fields(outer_row, selected_row)
     for prediction_row in participant_predictions:
@@ -942,7 +970,17 @@ def _evaluate_nested_outer_fold(test_participant, participants, candidate_config
     return outer_row, outer_inner_rows, selected_row, participant_predictions
 
 
-def _evaluate_nested_inner_rows(test_participant, outer_train_participants, candidate_configs, feature_cache, inner_pair_cache, *, progress=None):
+def _evaluate_nested_inner_rows(
+    test_participant,
+    outer_train_participants,
+    candidate_configs,
+    feature_cache,
+    inner_pair_cache,
+    *,
+    progress=None,
+    label_shuffle_control=False,
+    label_shuffle_seed=0,
+):
     inner_rows = []
     completed = 0
     total = len(candidate_configs) * len(outer_train_participants)
@@ -950,7 +988,15 @@ def _evaluate_nested_inner_rows(test_participant, outer_train_participants, cand
         feature_sets = feature_cache[_feature_cache_key(candidate_config)]
         for validation_participant in outer_train_participants:
             excluded_pair = tuple(sorted((int(test_participant), int(validation_participant))))
-            pair_rows = _cached_nested_pair_rows(candidate_index, candidate_config, excluded_pair, feature_sets, inner_pair_cache)
+            pair_rows = _cached_nested_pair_rows(
+                candidate_index,
+                candidate_config,
+                excluded_pair,
+                feature_sets,
+                inner_pair_cache,
+                label_shuffle_control=label_shuffle_control,
+                label_shuffle_seed=label_shuffle_seed,
+            )
             inner_rows.append(pair_rows[(int(test_participant), int(validation_participant))])
             completed += 1
             if progress is not None:
@@ -964,11 +1010,26 @@ def _evaluate_nested_inner_rows(test_participant, outer_train_participants, cand
     return inner_rows
 
 
-def _cached_nested_pair_rows(candidate_index, candidate_config, excluded_pair, feature_sets, inner_pair_cache):
-    cache_key = (int(candidate_index), tuple(excluded_pair))
+def _cached_nested_pair_rows(
+    candidate_index,
+    candidate_config,
+    excluded_pair,
+    feature_sets,
+    inner_pair_cache,
+    *,
+    label_shuffle_control=False,
+    label_shuffle_seed=0,
+):
+    cache_key = (int(candidate_index), tuple(excluded_pair), bool(label_shuffle_control), int(label_shuffle_seed))
     if cache_key not in inner_pair_cache:
         train_sets = [feature_set for participant, feature_set in feature_sets.items() if int(participant) not in excluded_pair]
-        fitted_model = _fit_outer_fold_model(train_sets, candidate_config, _resolved_classifier_param(candidate_config))
+        fitted_model = _fit_outer_fold_model(
+            train_sets,
+            candidate_config,
+            _resolved_classifier_param(candidate_config),
+            label_shuffle_seed=label_shuffle_seed if label_shuffle_control else None,
+            label_shuffle_context=(int(candidate_index), *tuple(int(participant) for participant in excluded_pair)),
+        )
         first_participant, second_participant = excluded_pair
         pair_rows = {}
         for outer_test_participant, validation_participant in (
@@ -989,6 +1050,15 @@ def _cached_nested_pair_rows(candidate_index, candidate_config, excluded_pair, f
             )
         inner_pair_cache[cache_key] = pair_rows
     return inner_pair_cache[cache_key]
+
+
+def _training_labels(feature_set, *, label_shuffle_seed=None, label_shuffle_context=()):
+    labels = np.asarray(feature_set.labels, dtype=int)
+    if label_shuffle_seed is None:
+        return labels
+    seed_values = [int(label_shuffle_seed), *[int(value) for value in label_shuffle_context], int(feature_set.participant)]
+    rng = np.random.default_rng(np.random.SeedSequence(seed_values))
+    return rng.permutation(labels)
 
 
 def _feature_cache_key(config):
@@ -1063,6 +1133,8 @@ def _select_nested_candidate(inner_rows):
                 "selected_classifier_param": example["classifier_param"],
                 "selected_components_pca": example["components_pca"],
                 "selected_max_trials_per_class_per_participant": example["max_trials_per_class_per_participant"],
+                "label_shuffle_control": example.get("label_shuffle_control", False),
+                "label_shuffle_seed": example.get("label_shuffle_seed", ""),
             }
         )
     ranked = sorted(
@@ -1092,14 +1164,37 @@ def _add_selected_candidate_fields(row, selected_row):
         row[key] = value
 
 
-def _evaluate_outer_fold(train_sets, test_set, *, config, classifier_param, include_predictions=True):
-    fitted_model = _fit_outer_fold_model(train_sets, config, classifier_param)
+def _evaluate_outer_fold(
+    train_sets,
+    test_set,
+    *,
+    config,
+    classifier_param,
+    include_predictions=True,
+    label_shuffle_seed=None,
+    label_shuffle_context=(),
+):
+    fitted_model = _fit_outer_fold_model(
+        train_sets,
+        config,
+        classifier_param,
+        label_shuffle_seed=label_shuffle_seed,
+        label_shuffle_context=label_shuffle_context,
+    )
     return _score_outer_fold_model(fitted_model, test_set, config, include_predictions=include_predictions)
 
 
-def _fit_outer_fold_model(train_sets, config, classifier_param):
+def _fit_outer_fold_model(train_sets, config, classifier_param, *, label_shuffle_seed=None, label_shuffle_context=()):
     train_features = np.vstack([_normalized_subject_features(feature_set, config) for feature_set in train_sets])
-    train_labels_one_based = np.concatenate([feature_set.labels for feature_set in train_sets])
+    train_label_arrays = [
+        _training_labels(
+            feature_set,
+            label_shuffle_seed=label_shuffle_seed,
+            label_shuffle_context=label_shuffle_context,
+        )
+        for feature_set in train_sets
+    ]
+    train_labels_one_based = np.concatenate(train_label_arrays)
     train_labels = train_labels_one_based - 1
 
     train_window = _centered_window(config.window_center, config.window_size)
@@ -1124,6 +1219,8 @@ def _fit_outer_fold_model(train_sets, config, classifier_param):
         "train_labels": train_labels,
         "train_participants": tuple(feature_set.participant for feature_set in train_sets),
         "train_window": train_window,
+        "label_shuffle_control": label_shuffle_seed is not None,
+        "label_shuffle_seed": "" if label_shuffle_seed is None else int(label_shuffle_seed),
     }
 
 
@@ -1191,6 +1288,8 @@ def _score_outer_fold_model(fitted_model, test_set, config, *, include_predictio
         "n_channels": test_set.n_channels,
         "n_window_samples": test_set.n_window_samples,
         "n_baseline_samples": test_set.n_baseline_samples,
+        "label_shuffle_control": bool(fitted_model["label_shuffle_control"]),
+        "label_shuffle_seed": fitted_model["label_shuffle_seed"],
     }
     prediction_rows = []
     if include_predictions:
@@ -1668,6 +1767,21 @@ def _row_value_counts(rows, key, *, fallback_key=None, transform=str):
         except (TypeError, ValueError):
             continue
     return Counter(values)
+
+
+def _single_row_value(rows, key, *, default=""):
+    values = []
+    for row in rows:
+        value = row.get(key, default)
+        if value in (None, ""):
+            continue
+        if value not in values:
+            values.append(value)
+    if not values:
+        return default
+    if len(values) == 1:
+        return values[0]
+    return ";".join(str(value) for value in values)
 
 
 def _participants_total(differences):

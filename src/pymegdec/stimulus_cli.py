@@ -367,6 +367,12 @@ def _build_cross_subject_nested_parser(prog: str | None = None) -> argparse.Argu
     )
     parser.add_argument("--chance-classes", type=int, default=DEFAULT_CROSS_SUBJECT_CHANCE_CLASSES, help="Number of stimulus classes used for chance level.")
     parser.add_argument("--random-state", type=int, default=0, help="Random state passed to classifiers.")
+    parser.add_argument(
+        "--label-shuffle-control",
+        action="store_true",
+        help="Shuffle training labels within each participant for a nested null-control benchmark.",
+    )
+    parser.add_argument("--label-shuffle-seed", type=int, default=0, help="Seed for the nested label-shuffle control.")
     parser.add_argument("--signflip-permutations", type=int, default=10000, help="Monte Carlo sign-flip permutations for the group summary.")
     parser.add_argument("--signflip-seed", type=int, default=0, help="Random seed for sign-flip permutations.")
     parser.add_argument("--outer-output", default="outputs/stimulus_cross_subject_nested_outer.csv", help="Untouched outer participant score CSV.")
@@ -421,6 +427,8 @@ def stimulus_cross_subject_nested(argv: Sequence[str] | None = None, prog: str |
         write_incremental=args.write_incremental,
         outer_participants=outer_participants,
         progress=lambda message: print(message, flush=True),
+        label_shuffle_control=args.label_shuffle_control,
+        label_shuffle_seed=args.label_shuffle_seed,
     )
     print(f"Wrote {len(artifacts['outer'])} untouched outer participant rows to {args.outer_output}")
     print(f"Wrote {len(artifacts['inner_validation'])} inner validation rows to {args.inner_validation_output}")

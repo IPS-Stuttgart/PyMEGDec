@@ -92,6 +92,14 @@ inner winner margin, defined per outer fold as the best inner balanced accuracy
 minus the second-best inner balanced accuracy, to make noisy hyperparameter
 selection visible.
 
+Add `--label-shuffle-control` to run a nested null control with the same
+participant splits and candidate grid, but with stimulus labels shuffled within
+each training participant before every model fit. Validation and outer-test
+labels remain untouched, so this control should return group performance near
+16-way chance if the pipeline is not exploiting leakage or a nonstimulus
+confound. In the manual workflow, enable `label_shuffle_control`; artifacts are
+written as `stimulus_cross_subject_nested_label_shuffle_*.csv`.
+
 ## Time-resolved decoding curve
 
 ```powershell
