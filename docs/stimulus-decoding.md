@@ -109,6 +109,30 @@ labels remain untouched, so this control should return group performance near
 confound. In the manual workflow, enable `label_shuffle_control`; artifacts are
 written as `stimulus_cross_subject_nested_label_shuffle_*.csv`.
 
+## Confusion structure
+
+Use the confusion-structure export on trial prediction CSVs to check whether
+off-diagonal errors are meaningful rather than uniformly random. With stimulus
+metadata, the export tests whether confused image pairs share categories more
+often than expected from the true-category and predicted-category error
+marginals.
+
+```bash
+python scripts/export_stimulus_confusion_structure.py \
+  --predictions outputs/stimulus_cross_subject_nested_predictions.csv \
+  --stimulus-metadata stimulus_metadata.csv \
+  --output outputs/stimulus_cross_subject_nested_confusion_pairs.csv \
+  --category-output outputs/stimulus_cross_subject_nested_category_enrichment.csv \
+  --category-matrix-output outputs/stimulus_cross_subject_nested_category_matrix.csv \
+  --category-columns visual_category,semantic_category
+```
+
+The metadata CSV should contain one stimulus id column such as `stimulus` or
+`image_id`, plus one or more repeated category columns. The category-enrichment
+CSV reports same-category error rate, expected rate, lift, standardized
+residual, participant support, and a permutation p-value. The category matrix
+CSV reports directional category-to-category error counts and lifts.
+
 ## Time-resolved decoding curve
 
 ```powershell

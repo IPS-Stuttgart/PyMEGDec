@@ -258,6 +258,52 @@ class TestStimulusCrossSubject(unittest.TestCase):
         self.assertEqual(first["stimulus_b_category"], "food")
         self.assertTrue(first["same_category"])
 
+    def test_summarize_cross_subject_confusion_category_enrichment(self):
+        prediction_rows = [
+            {"test_participant": 1, "true_stimulus": 1, "predicted_stimulus": 2, "classifier": "logistic"},
+            {"test_participant": 2, "true_stimulus": 1, "predicted_stimulus": 2, "classifier": "logistic"},
+            {"test_participant": 1, "true_stimulus": 2, "predicted_stimulus": 1, "classifier": "logistic"},
+            {"test_participant": 2, "true_stimulus": 3, "predicted_stimulus": 2, "classifier": "logistic"},
+            {"test_participant": 3, "true_stimulus": 4, "predicted_stimulus": 3, "classifier": "logistic"},
+            {"test_participant": 3, "true_stimulus": 4, "predicted_stimulus": 4, "classifier": "logistic"},
+        ]
+        metadata_rows = [
+            {"stimulus": "1", "name": "apple", "category": "food"},
+            {"stimulus": "2", "name": "pear", "category": "food"},
+            {"stimulus": "3", "name": "hammer", "category": "tool"},
+            {"stimulus": "4", "name": "saw", "category": "tool"},
+        ]
+
+        enrichment_rows = cross_subject.summarize_cross_subject_confusion_category_enrichment(
+            prediction_rows,
+            stimulus_metadata_rows=metadata_rows,
+            category_columns=("category",),
+            n_permutations=128,
+            seed=0,
+        )
+        matrix_rows = cross_subject.summarize_cross_subject_confusion_category_matrix(
+            prediction_rows,
+            stimulus_metadata_rows=metadata_rows,
+            category_columns=("category",),
+        )
+
+        self.assertEqual(len(enrichment_rows), 1)
+        enrichment = enrichment_rows[0]
+        self.assertEqual(enrichment["category_column"], "category")
+        self.assertEqual(enrichment["n_errors_with_category"], 5)
+        self.assertEqual(enrichment["same_category_errors"], 4)
+        self.assertAlmostEqual(enrichment["expected_same_category_errors"], 14 / 5)
+        self.assertAlmostEqual(enrichment["same_category_lift"], 4 / (14 / 5))
+        self.assertEqual(enrichment["n_participants_with_category_errors"], 3)
+        self.assertEqual(enrichment["n_participants_with_same_category_errors"], 3)
+        self.assertLessEqual(enrichment["same_category_permutation_p_value"], 1.0)
+
+        food_to_food = next(row for row in matrix_rows if row["true_category"] == "food" and row["predicted_category"] == "food")
+        self.assertTrue(food_to_food["same_category"])
+        self.assertEqual(food_to_food["count"], 3)
+        self.assertAlmostEqual(food_to_food["expected_count"], 12 / 5)
+        self.assertAlmostEqual(food_to_food["category_confusion_lift"], 3 / (12 / 5))
+
     def test_nested_cross_subject_selects_from_inner_loso_only(self):
         data_by_participant = {
             1: _mat_data([1, 2, 1, 2], [-1.2, 1.2, -1.1, 1.1]),
