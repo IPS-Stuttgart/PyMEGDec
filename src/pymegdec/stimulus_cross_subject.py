@@ -14,7 +14,13 @@ import scipy.io as sio
 from reptrace.decoding.windowed import fit_window_model as fit_reptrace_window_model
 from reptrace.decoding.windowed import predict_window_model as predict_reptrace_window_model
 from reptrace.decoding.windowed import transform_window_features as transform_reptrace_window_features
-from reptrace.metrics.confusion import confusion_counts, per_class_accuracy
+from reptrace.metrics.confusion import (
+    confusion_category_enrichment,
+    confusion_category_matrix,
+    confusion_counts,
+    confusion_pair_summary,
+    per_class_accuracy,
+)
 from sklearn.metrics import accuracy_score, balanced_accuracy_score
 
 from pymegdec.alpha_metrics import write_alpha_metrics_csv
@@ -491,27 +497,18 @@ def summarize_cross_subject_confusion_pairs(prediction_rows, *, stimulus_metadat
     if missing:
         raise ValueError(f"Prediction rows are missing required columns: {sorted(missing)}")
 
-    metadata_by_stimulus = _stimulus_metadata_by_id(stimulus_metadata_rows)
-    rows = []
     group_columns = _present_group_columns(frame)
-    for group_key, group_frame in _iter_frame_groups(frame, group_columns):
-        rows.extend(
-            _summarize_confusion_pairs_for_group(
-                group_frame,
-                _group_row(group_columns, group_key),
-                metadata_by_stimulus,
-            )
-        )
-
-    return sorted(
-        rows,
-        key=lambda row: (
-            -int(row["total_confusions"]),
-            -float(row["mean_directional_rate"]) if np.isfinite(float(row["mean_directional_rate"])) else np.inf,
-            _stimulus_sort_key(row["stimulus_a"]),
-            _stimulus_sort_key(row["stimulus_b"]),
-        ),
+    pairs = confusion_pair_summary(
+        frame,
+        true_column="true_stimulus",
+        predicted_column="predicted_stimulus",
+        group_columns=group_columns,
+        participant_column="test_participant" if "test_participant" in frame.columns else None,
+        metadata_frame=_stimulus_metadata_frame(stimulus_metadata_rows),
+        metadata_label_columns=STIMULUS_METADATA_ID_COLUMNS,
+        label_prefix="stimulus",
     )
+    return pairs.to_dict(orient="records")
 
 
 def summarize_cross_subject_confusion_category_enrichment(
@@ -524,11 +521,7 @@ def summarize_cross_subject_confusion_category_enrichment(
 ):
     """Test whether off-diagonal errors stay within stimulus metadata categories."""
 
-    if not prediction_rows:
-        return []
-    metadata_by_stimulus = _stimulus_metadata_by_id(stimulus_metadata_rows)
-    category_columns = _normalize_category_columns(stimulus_metadata_rows, category_columns)
-    if not metadata_by_stimulus or not category_columns:
+    if not prediction_rows or not stimulus_metadata_rows:
         return []
 
     import pandas as pd
@@ -539,20 +532,20 @@ def summarize_cross_subject_confusion_category_enrichment(
     if missing:
         raise ValueError(f"Prediction rows are missing required columns: {sorted(missing)}")
 
-    rows = []
     group_columns = _present_group_columns(frame)
-    for group_key, group_frame in _iter_frame_groups(frame, group_columns):
-        rows.extend(
-            _summarize_category_enrichment_for_group(
-                group_frame,
-                _group_row(group_columns, group_key),
-                metadata_by_stimulus,
-                category_columns,
-                n_permutations=n_permutations,
-                seed=seed,
-            )
-        )
-    return rows
+    enrichment = confusion_category_enrichment(
+        frame,
+        metadata_frame=_stimulus_metadata_frame(stimulus_metadata_rows),
+        true_column="true_stimulus",
+        predicted_column="predicted_stimulus",
+        category_columns=category_columns,
+        group_columns=group_columns,
+        participant_column="test_participant" if "test_participant" in frame.columns else None,
+        metadata_label_columns=STIMULUS_METADATA_ID_COLUMNS,
+        n_permutations=n_permutations,
+        seed=seed,
+    )
+    return enrichment.to_dict(orient="records")
 
 
 def summarize_cross_subject_confusion_category_matrix(
@@ -563,11 +556,7 @@ def summarize_cross_subject_confusion_category_matrix(
 ):
     """Summarize directional category-to-category error counts and lifts."""
 
-    if not prediction_rows:
-        return []
-    metadata_by_stimulus = _stimulus_metadata_by_id(stimulus_metadata_rows)
-    category_columns = _normalize_category_columns(stimulus_metadata_rows, category_columns)
-    if not metadata_by_stimulus or not category_columns:
+    if not prediction_rows or not stimulus_metadata_rows:
         return []
 
     import pandas as pd
@@ -578,27 +567,18 @@ def summarize_cross_subject_confusion_category_matrix(
     if missing:
         raise ValueError(f"Prediction rows are missing required columns: {sorted(missing)}")
 
-    rows = []
     group_columns = _present_group_columns(frame)
-    for group_key, group_frame in _iter_frame_groups(frame, group_columns):
-        rows.extend(
-            _summarize_category_matrix_for_group(
-                group_frame,
-                _group_row(group_columns, group_key),
-                metadata_by_stimulus,
-                category_columns,
-            )
-        )
-    return sorted(
-        rows,
-        key=lambda row: (
-            -float(row["category_confusion_lift"]) if np.isfinite(float(row["category_confusion_lift"])) else np.inf,
-            -int(row["count"]),
-            str(row["category_column"]),
-            str(row["true_category"]),
-            str(row["predicted_category"]),
-        ),
+    matrix = confusion_category_matrix(
+        frame,
+        metadata_frame=_stimulus_metadata_frame(stimulus_metadata_rows),
+        true_column="true_stimulus",
+        predicted_column="predicted_stimulus",
+        category_columns=category_columns,
+        group_columns=group_columns,
+        participant_column="test_participant" if "test_participant" in frame.columns else None,
+        metadata_label_columns=STIMULUS_METADATA_ID_COLUMNS,
     )
+    return matrix.to_dict(orient="records")
 
 
 def _assemble_nested_artifacts(outer_rows, inner_rows, selected_rows, prediction_rows, candidate_configs):
@@ -710,383 +690,13 @@ def _present_group_columns(frame):
     return tuple(column for column in CROSS_SUBJECT_PREDICTION_GROUP_COLUMNS if column in frame.columns)
 
 
-def _iter_frame_groups(frame, group_columns):
-    if not group_columns:
-        yield (), frame
-        return
-    for group_key, group_frame in frame.groupby(list(group_columns), dropna=False, sort=True):
-        if len(group_columns) == 1:
-            group_key = (group_key,)
-        yield tuple(group_key), group_frame
-
-
-def _group_row(group_columns, group_key):
-    return dict(zip(group_columns, group_key))
-
-
-def _summarize_category_enrichment_for_group(
-    group_frame,
-    group_values,
-    metadata_by_stimulus,
-    category_columns,
-    *,
-    n_permutations,
-    seed,
-):
-    error_frame = group_frame[group_frame["true_stimulus"] != group_frame["predicted_stimulus"]]
-    if error_frame.empty:
-        return []
-
-    rows = []
-    for category_column in category_columns:
-        category_errors = _category_error_rows(error_frame, metadata_by_stimulus, category_column)
-        if not category_errors:
-            continue
-        true_categories = [row["true_category"] for row in category_errors]
-        predicted_categories = [row["predicted_category"] for row in category_errors]
-        same_category = [true_category == predicted_category for true_category, predicted_category in zip(true_categories, predicted_categories)]
-        observed = int(sum(same_category))
-        total = int(len(category_errors))
-        expected = _expected_same_category_count(true_categories, predicted_categories)
-        same_participants = {
-            row["test_participant"]
-            for row, is_same in zip(category_errors, same_category)
-            if is_same and row.get("test_participant") not in (None, "")
-        }
-        error_participants = {row["test_participant"] for row in category_errors if row.get("test_participant") not in (None, "")}
-        rows.append(
-            {
-                **group_values,
-                "category_column": category_column,
-                "category_values": ";".join(sorted(set(true_categories) | set(predicted_categories))),
-                "n_errors_with_category": total,
-                "same_category_errors": observed,
-                "expected_same_category_errors": expected,
-                "same_category_error_rate": _safe_rate(observed, total),
-                "expected_same_category_error_rate": _safe_rate(expected, total),
-                "same_category_lift": _safe_rate(observed, expected),
-                "same_category_excess": _difference_or_nan(observed, expected),
-                "same_category_standardized_residual": _standardized_residual(observed, expected),
-                "n_participants_with_category_errors": len(error_participants),
-                "n_participants_with_same_category_errors": len(same_participants),
-                "same_category_permutation_p_value": _same_category_permutation_p_value(
-                    true_categories,
-                    predicted_categories,
-                    observed=observed,
-                    n_permutations=n_permutations,
-                    seed=_category_seed(seed, group_values, category_column),
-                ),
-            }
-        )
-    return rows
-
-
-def _summarize_category_matrix_for_group(group_frame, group_values, metadata_by_stimulus, category_columns):
-    error_frame = group_frame[group_frame["true_stimulus"] != group_frame["predicted_stimulus"]]
-    if error_frame.empty:
-        return []
-
-    rows = []
-    for category_column in category_columns:
-        category_errors = _category_error_rows(error_frame, metadata_by_stimulus, category_column)
-        if not category_errors:
-            continue
-        total = int(len(category_errors))
-        true_counts = Counter(row["true_category"] for row in category_errors)
-        predicted_counts = Counter(row["predicted_category"] for row in category_errors)
-        category_pair_counts = Counter((row["true_category"], row["predicted_category"]) for row in category_errors)
-        category_pair_participants: dict[tuple[str, str], set] = {}
-        for row in category_errors:
-            participant = row.get("test_participant")
-            if participant in (None, ""):
-                continue
-            category_pair_participants.setdefault((row["true_category"], row["predicted_category"]), set()).add(participant)
-
-        for (true_category, predicted_category), count in category_pair_counts.items():
-            expected = _expected_confusion_count(true_counts[true_category], predicted_counts[predicted_category], total)
-            rows.append(
-                {
-                    **group_values,
-                    "category_column": category_column,
-                    "true_category": true_category,
-                    "predicted_category": predicted_category,
-                    "same_category": bool(true_category == predicted_category),
-                    "count": int(count),
-                    "expected_count": expected,
-                    "rate": _safe_rate(count, total),
-                    "expected_rate": _safe_rate(expected, total),
-                    "category_confusion_lift": _safe_rate(count, expected),
-                    "category_confusion_excess": _difference_or_nan(count, expected),
-                    "category_standardized_residual": _standardized_residual(count, expected),
-                    "true_category_error_count": int(true_counts[true_category]),
-                    "predicted_category_error_count": int(predicted_counts[predicted_category]),
-                    "n_errors_with_category": total,
-                    "n_participants": len(category_pair_participants.get((true_category, predicted_category), set())),
-                }
-            )
-    return rows
-
-
-def _category_error_rows(error_frame, metadata_by_stimulus, category_column):
-    rows = []
-    for _, row in error_frame.iterrows():
-        true_category = _metadata_category_value(metadata_by_stimulus, row["true_stimulus"], category_column)
-        predicted_category = _metadata_category_value(metadata_by_stimulus, row["predicted_stimulus"], category_column)
-        if true_category == "" or predicted_category == "":
-            continue
-        rows.append(
-            {
-                "true_category": true_category,
-                "predicted_category": predicted_category,
-                "test_participant": row.get("test_participant", ""),
-            }
-        )
-    return rows
-
-
-def _expected_same_category_count(true_categories, predicted_categories):
-    total = len(true_categories)
-    if total == 0:
-        return np.nan
-    true_counts = Counter(true_categories)
-    predicted_counts = Counter(predicted_categories)
-    return float(sum(true_counts[category] * predicted_counts[category] for category in set(true_counts) | set(predicted_counts)) / total)
-
-
-def _same_category_permutation_p_value(true_categories, predicted_categories, *, observed, n_permutations, seed):
-    if n_permutations is None or int(n_permutations) <= 0:
-        return np.nan
-    true_categories = np.asarray(true_categories, dtype=object)
-    predicted_categories = np.asarray(predicted_categories, dtype=object)
-    if true_categories.size == 0 or predicted_categories.size == 0:
-        return np.nan
-    rng = np.random.default_rng(seed)
-    exceedances = 0
-    for _ in range(int(n_permutations)):
-        shuffled = rng.permutation(predicted_categories)
-        exceedances += int(np.sum(true_categories == shuffled) >= observed)
-    return float((exceedances + 1) / (int(n_permutations) + 1))
-
-
-def _category_seed(seed, group_values, category_column):
-    seed_values = [0 if seed is None else int(seed), sum(ord(character) for character in str(category_column))]
-    for key, value in sorted(group_values.items()):
-        seed_values.append(sum(ord(character) for character in f"{key}={value}"))
-    return np.random.SeedSequence(seed_values)
-
-
-def _summarize_confusion_pairs_for_group(group_frame, group_values, metadata_by_stimulus):
-    true_counts = group_frame["true_stimulus"].value_counts(dropna=False).to_dict()
-    error_frame = group_frame[group_frame["true_stimulus"] != group_frame["predicted_stimulus"]]
-    if error_frame.empty:
-        return []
-
-    pair_counts, pair_participants, directional_participants = _confusion_pair_maps(error_frame)
-    error_marginals = _confusion_error_marginals(error_frame)
-    return [
-        _confusion_pair_summary_row(
-            group_values,
-            stimulus_a,
-            stimulus_b,
-            counts,
-            true_counts,
-            error_marginals,
-            pair_participants,
-            directional_participants,
-            metadata_by_stimulus,
-        )
-        for (stimulus_a, stimulus_b), counts in pair_counts.items()
-    ]
-
-
-def _confusion_pair_maps(error_frame):
-    pair_counts: dict[tuple, Counter] = {}
-    pair_participants: dict[tuple, set] = {}
-    directional_participants: dict[tuple, set] = {}
-    for _, row in error_frame.iterrows():
-        true_stimulus = row["true_stimulus"]
-        predicted_stimulus = row["predicted_stimulus"]
-        stimulus_a, stimulus_b = _ordered_stimulus_pair(true_stimulus, predicted_stimulus)
-        pair_counts.setdefault((stimulus_a, stimulus_b), Counter())
-        pair_participants.setdefault((stimulus_a, stimulus_b), set())
-        directional_participants.setdefault((stimulus_a, stimulus_b, true_stimulus, predicted_stimulus), set())
-        pair_counts[(stimulus_a, stimulus_b)][(true_stimulus, predicted_stimulus)] += 1
-        if "test_participant" in row:
-            participant = row["test_participant"]
-            pair_participants[(stimulus_a, stimulus_b)].add(participant)
-            directional_participants[(stimulus_a, stimulus_b, true_stimulus, predicted_stimulus)].add(participant)
-    return pair_counts, pair_participants, directional_participants
-
-
-def _confusion_error_marginals(error_frame):
-    return {
-        "true_counts": error_frame["true_stimulus"].value_counts(dropna=False).to_dict(),
-        "predicted_counts": error_frame["predicted_stimulus"].value_counts(dropna=False).to_dict(),
-        "total": int(len(error_frame)),
-    }
-
-
-def _confusion_pair_summary_row(
-    group_values,
-    stimulus_a,
-    stimulus_b,
-    counts,
-    true_counts,
-    error_marginals,
-    pair_participants,
-    directional_participants,
-    metadata_by_stimulus,
-):
-    a_to_b_count = int(counts[(stimulus_a, stimulus_b)])
-    b_to_a_count = int(counts[(stimulus_b, stimulus_a)])
-    true_a_trials = int(true_counts.get(stimulus_a, 0))
-    true_b_trials = int(true_counts.get(stimulus_b, 0))
-    a_to_b_rate = _safe_rate(a_to_b_count, true_a_trials)
-    b_to_a_rate = _safe_rate(b_to_a_count, true_b_trials)
-    total_confusions = a_to_b_count + b_to_a_count
-    bias_metrics = _confusion_pair_bias_metrics(stimulus_a, stimulus_b, a_to_b_count, b_to_a_count, error_marginals)
-    result = {
-        **group_values,
-        "stimulus_a": stimulus_a,
-        "stimulus_b": stimulus_b,
-        "a_to_b_count": a_to_b_count,
-        "b_to_a_count": b_to_a_count,
-        "total_confusions": total_confusions,
-        "true_a_trials": true_a_trials,
-        "true_b_trials": true_b_trials,
-        "a_to_b_rate": a_to_b_rate,
-        "b_to_a_rate": b_to_a_rate,
-        "mean_directional_rate": _nanmean_or_nan((a_to_b_rate, b_to_a_rate)),
-        "max_directional_rate": _nanmax_or_nan((a_to_b_rate, b_to_a_rate)),
-        "min_directional_rate": _nanmin_or_nan((a_to_b_rate, b_to_a_rate)),
-        "absolute_rate_asymmetry": _absolute_difference_or_nan(a_to_b_rate, b_to_a_rate),
-        "total_pair_error_rate": _safe_rate(total_confusions, true_a_trials + true_b_trials),
-        **bias_metrics,
-        "symmetric_confusion_count": min(a_to_b_count, b_to_a_count),
-        "n_confused_participants": len(pair_participants.get((stimulus_a, stimulus_b), set())),
-        "a_to_b_participants": len(directional_participants.get((stimulus_a, stimulus_b, stimulus_a, stimulus_b), set())),
-        "b_to_a_participants": len(directional_participants.get((stimulus_a, stimulus_b, stimulus_b, stimulus_a), set())),
-    }
-    _add_stimulus_metadata(result, stimulus_a, stimulus_b, metadata_by_stimulus)
-    return result
-
-
-def _confusion_pair_bias_metrics(stimulus_a, stimulus_b, a_to_b_count, b_to_a_count, error_marginals):
-    true_error_counts = error_marginals["true_counts"]
-    predicted_error_counts = error_marginals["predicted_counts"]
-    total_errors = error_marginals["total"]
-    true_a_error_count = int(true_error_counts.get(stimulus_a, 0))
-    true_b_error_count = int(true_error_counts.get(stimulus_b, 0))
-    predicted_a_error_count = int(predicted_error_counts.get(stimulus_a, 0))
-    predicted_b_error_count = int(predicted_error_counts.get(stimulus_b, 0))
-    expected_a_to_b_count = _expected_confusion_count(true_a_error_count, predicted_b_error_count, total_errors)
-    expected_b_to_a_count = _expected_confusion_count(true_b_error_count, predicted_a_error_count, total_errors)
-    expected_total_confusions = expected_a_to_b_count + expected_b_to_a_count
-    total_confusions = a_to_b_count + b_to_a_count
-    return {
-        "true_a_error_count": true_a_error_count,
-        "true_b_error_count": true_b_error_count,
-        "predicted_a_error_count": predicted_a_error_count,
-        "predicted_b_error_count": predicted_b_error_count,
-        "expected_a_to_b_count": expected_a_to_b_count,
-        "expected_b_to_a_count": expected_b_to_a_count,
-        "expected_total_confusions": expected_total_confusions,
-        "a_to_b_lift": _safe_rate(a_to_b_count, expected_a_to_b_count),
-        "b_to_a_lift": _safe_rate(b_to_a_count, expected_b_to_a_count),
-        "pair_confusion_lift": _safe_rate(total_confusions, expected_total_confusions),
-        "total_confusion_excess": _difference_or_nan(total_confusions, expected_total_confusions),
-        "pair_standardized_residual": _standardized_residual(total_confusions, expected_total_confusions),
-    }
-
-
-def _ordered_stimulus_pair(first, second):
-    return tuple(sorted((first, second), key=_stimulus_sort_key))
-
-
-def _stimulus_sort_key(value):
-    try:
-        return 0, int(value)
-    except (TypeError, ValueError):
-        return 1, str(value)
-
-
-def _stimulus_metadata_by_id(stimulus_metadata_rows):
-    metadata_by_stimulus: dict = {}
+def _stimulus_metadata_frame(stimulus_metadata_rows):
     if not stimulus_metadata_rows:
-        return metadata_by_stimulus
-    for metadata_row in stimulus_metadata_rows:
-        stimulus = _metadata_stimulus_id(metadata_row)
-        if stimulus is not None:
-            metadata_by_stimulus[stimulus] = dict(metadata_row)
-    return metadata_by_stimulus
+        return None
 
+    import pandas as pd
 
-def _normalize_category_columns(stimulus_metadata_rows, category_columns):
-    if category_columns is None:
-        return _infer_category_columns(stimulus_metadata_rows)
-    if isinstance(category_columns, str):
-        category_columns = [column.strip() for column in category_columns.split(",") if column.strip()]
-    return tuple(str(column).strip() for column in category_columns if str(column).strip())
-
-
-def _infer_category_columns(stimulus_metadata_rows):
-    if not stimulus_metadata_rows:
-        return tuple()
-    excluded = {column.lower() for column in STIMULUS_METADATA_ID_COLUMNS}
-    excluded.update({"name", "stimulus_name", "image", "image_name", "filename", "file", "path"})
-    columns = sorted({column for row in stimulus_metadata_rows for column in row if column.lower() not in excluded})
-    inferred = []
-    for column in columns:
-        values = [str(row.get(column, "")).strip() for row in stimulus_metadata_rows]
-        values = [value for value in values if value]
-        if len(set(values)) < len(values):
-            inferred.append(column)
-    return tuple(inferred)
-
-
-def _metadata_stimulus_id(metadata_row):
-    for column in STIMULUS_METADATA_ID_COLUMNS:
-        value = metadata_row.get(column)
-        if value not in (None, ""):
-            return value
-    return None
-
-
-def _metadata_category_value(metadata_by_stimulus, stimulus, category_column):
-    metadata = _lookup_stimulus_metadata(metadata_by_stimulus, stimulus)
-    value = metadata.get(category_column, "")
-    if value in (None, ""):
-        return ""
-    return str(value).strip()
-
-
-def _add_stimulus_metadata(row, stimulus_a, stimulus_b, metadata_by_stimulus):
-    metadata_a = _lookup_stimulus_metadata(metadata_by_stimulus, stimulus_a)
-    metadata_b = _lookup_stimulus_metadata(metadata_by_stimulus, stimulus_b)
-    if not metadata_a and not metadata_b:
-        return
-
-    metadata_keys = sorted((set(metadata_a) | set(metadata_b)) - set(STIMULUS_METADATA_ID_COLUMNS))
-    for key in metadata_keys:
-        value_a = metadata_a.get(key, "")
-        value_b = metadata_b.get(key, "")
-        row[f"stimulus_a_{key}"] = value_a
-        row[f"stimulus_b_{key}"] = value_b
-        if value_a != "" and value_b != "":
-            row[f"same_{key}"] = bool(value_a == value_b)
-
-
-def _lookup_stimulus_metadata(metadata_by_stimulus, stimulus):
-    if stimulus in metadata_by_stimulus:
-        return metadata_by_stimulus[stimulus]
-    stimulus_text = str(stimulus)
-    if stimulus_text in metadata_by_stimulus:
-        return metadata_by_stimulus[stimulus_text]
-    try:
-        stimulus_int = int(stimulus)
-    except (TypeError, ValueError):
-        return {}
-    return metadata_by_stimulus.get(stimulus_int, {})
+    return pd.DataFrame(stimulus_metadata_rows)
 
 
 def export_cross_subject_stimulus_smoke(  # pylint: disable=too-many-arguments
@@ -2079,52 +1689,12 @@ def _nanmedian_or_nan(values):
     return float(np.median(values))
 
 
-def _nanmax_or_nan(values):
-    values = np.asarray(values, dtype=float)
-    values = values[np.isfinite(values)]
-    if values.size == 0:
-        return np.nan
-    return float(np.max(values))
-
-
 def _nanmin_or_nan(values):
     values = np.asarray(values, dtype=float)
     values = values[np.isfinite(values)]
     if values.size == 0:
         return np.nan
     return float(np.min(values))
-
-
-def _safe_rate(numerator, denominator):
-    denominator = float(denominator)
-    if denominator <= 0:
-        return np.nan
-    return float(numerator) / denominator
-
-
-def _expected_confusion_count(true_error_count, predicted_error_count, total_errors):
-    total_errors = float(total_errors)
-    if total_errors <= 0:
-        return np.nan
-    return float(true_error_count) * float(predicted_error_count) / total_errors
-
-
-def _difference_or_nan(first, second):
-    if not np.isfinite(first) or not np.isfinite(second):
-        return np.nan
-    return float(first - second)
-
-
-def _standardized_residual(observed, expected):
-    if not np.isfinite(expected) or expected <= 0:
-        return np.nan
-    return float(observed - expected) / float(np.sqrt(expected))
-
-
-def _absolute_difference_or_nan(first, second):
-    if not np.isfinite(first) or not np.isfinite(second):
-        return np.nan
-    return float(abs(first - second))
 
 
 def _sem_or_nan(values):

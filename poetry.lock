@@ -2269,7 +2269,7 @@ files = [
 
 [[package]]
 name = "reptrace"
-version = "0.1.0"
+version = "0.1.1"
 description = "Probabilistic tracing of neural representations over time."
 optional = false
 python-versions = ">=3.11,<3.14"
@@ -2288,8 +2288,8 @@ scikit-learn = "*"
 [package.source]
 type = "git"
 url = "https://github.com/IPS-Stuttgart/RepTrace.git"
-reference = "0.1.0"
-resolved_reference = "7fe273322ebc22c5b881567a0a5bdeccc6579d94"
+reference = "a0728bfca1f3445a55180b84d733915399b20195"
+resolved_reference = "a0728bfca1f3445a55180b84d733915399b20195"
 
 [[package]]
 name = "requests"
@@ -2867,4 +2867,4 @@ xgboost = ["xgboost"]
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.11,<3.14"
-content-hash = "09658b60751c42daa49a93a366f8f014524e7054113a7e65faa842ab1bbb4bb2"
+content-hash = "df4878af49ed96c45bbe940671c80a11bb2583e0da8e27b7b379aa6efa810917"
