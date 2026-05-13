@@ -158,6 +158,40 @@ class TestStimulusCrossSubject(unittest.TestCase):
         self.assertEqual({row["top2_correct"] for row in artifacts["predictions"]}, {True})
         self.assertEqual({row["top3_correct"] for row in artifacts["predictions"]}, {True})
 
+    def test_summarize_cross_subject_confusion_pairs(self):
+        prediction_rows = [
+            {"test_participant": 1, "true_stimulus": 1, "predicted_stimulus": 2, "classifier": "logistic"},
+            {"test_participant": 2, "true_stimulus": 1, "predicted_stimulus": 2, "classifier": "logistic"},
+            {"test_participant": 1, "true_stimulus": 2, "predicted_stimulus": 1, "classifier": "logistic"},
+            {"test_participant": 2, "true_stimulus": 1, "predicted_stimulus": 1, "classifier": "logistic"},
+            {"test_participant": 1, "true_stimulus": 2, "predicted_stimulus": 2, "classifier": "logistic"},
+            {"test_participant": 2, "true_stimulus": 3, "predicted_stimulus": 2, "classifier": "logistic"},
+        ]
+        metadata_rows = [
+            {"stimulus": "1", "name": "apple", "category": "food"},
+            {"stimulus": "2", "name": "pear", "category": "food"},
+            {"stimulus": "3", "name": "hammer", "category": "tool"},
+        ]
+
+        pair_rows = cross_subject.summarize_cross_subject_confusion_pairs(
+            prediction_rows,
+            stimulus_metadata_rows=metadata_rows,
+        )
+
+        self.assertEqual(len(pair_rows), 2)
+        first = pair_rows[0]
+        self.assertEqual(first["stimulus_a"], 1)
+        self.assertEqual(first["stimulus_b"], 2)
+        self.assertEqual(first["a_to_b_count"], 2)
+        self.assertEqual(first["b_to_a_count"], 1)
+        self.assertEqual(first["total_confusions"], 3)
+        self.assertEqual(first["n_confused_participants"], 2)
+        self.assertAlmostEqual(first["a_to_b_rate"], 2 / 3)
+        self.assertAlmostEqual(first["b_to_a_rate"], 1 / 2)
+        self.assertEqual(first["stimulus_a_category"], "food")
+        self.assertEqual(first["stimulus_b_category"], "food")
+        self.assertTrue(first["same_category"])
+
     def test_nested_cross_subject_selects_from_inner_loso_only(self):
         data_by_participant = {
             1: _mat_data([1, 2, 1, 2], [-1.2, 1.2, -1.1, 1.1]),

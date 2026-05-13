@@ -38,6 +38,15 @@ DEFAULT_CROSS_SUBJECT_NESTED_WINDOW_CENTERS = (0.150, 0.175, 0.200)
 DEFAULT_CROSS_SUBJECT_SELECTION_METRIC = "balanced_accuracy"
 FEATURE_MODES = ("sensor_mean", "sensor_flat")
 NORMALIZATION_MODES = ("none", "subject_z", "subject_baseline_z")
+CROSS_SUBJECT_PREDICTION_GROUP_COLUMNS = (
+    "window_center_s",
+    "feature_mode",
+    "normalization",
+    "classifier",
+    "components_pca",
+    "max_trials_per_class_per_participant",
+)
+STIMULUS_METADATA_ID_COLUMNS = ("stimulus", "stimulus_id", "true_stimulus", "label", "image_id")
 
 
 @dataclass(frozen=True)
@@ -115,12 +124,14 @@ def evaluate_cross_subject_stimulus_smoke(data_folder, participants, *, config=N
 
     group_summary_rows = summarize_cross_subject_stimulus_smoke(outer_rows, config=config)
     confusion_rows, per_stimulus_rows = summarize_cross_subject_predictions(prediction_rows)
+    confusion_pair_rows = summarize_cross_subject_confusion_pairs(prediction_rows)
     return {
         "outer": outer_rows,
         "predictions": prediction_rows,
         "group_summary": group_summary_rows,
         "confusion": confusion_rows,
         "per_stimulus": per_stimulus_rows,
+        "confusion_pairs": confusion_pair_rows,
     }
 
 
@@ -397,14 +408,7 @@ def summarize_cross_subject_predictions(prediction_rows):
     import pandas as pd
 
     frame = pd.DataFrame(prediction_rows)
-    group_columns = (
-        "window_center_s",
-        "feature_mode",
-        "normalization",
-        "classifier",
-        "components_pca",
-        "max_trials_per_class_per_participant",
-    )
+    group_columns = _present_group_columns(frame)
     confusion = confusion_counts(
         frame,
         true_column="true_stimulus",
@@ -421,6 +425,43 @@ def summarize_cross_subject_predictions(prediction_rows):
     return confusion.to_dict(orient="records"), per_stimulus.to_dict(orient="records")
 
 
+def summarize_cross_subject_confusion_pairs(prediction_rows, *, stimulus_metadata_rows=None):
+    """Summarize off-diagonal errors as unordered, bidirectional stimulus pairs."""
+
+    if not prediction_rows:
+        return []
+
+    import pandas as pd
+
+    frame = pd.DataFrame(prediction_rows)
+    required = {"true_stimulus", "predicted_stimulus"}
+    missing = required - set(frame.columns)
+    if missing:
+        raise ValueError(f"Prediction rows are missing required columns: {sorted(missing)}")
+
+    metadata_by_stimulus = _stimulus_metadata_by_id(stimulus_metadata_rows)
+    rows = []
+    group_columns = _present_group_columns(frame)
+    for group_key, group_frame in _iter_frame_groups(frame, group_columns):
+        rows.extend(
+            _summarize_confusion_pairs_for_group(
+                group_frame,
+                _group_row(group_columns, group_key),
+                metadata_by_stimulus,
+            )
+        )
+
+    return sorted(
+        rows,
+        key=lambda row: (
+            -int(row["total_confusions"]),
+            -float(row["mean_directional_rate"]) if np.isfinite(float(row["mean_directional_rate"])) else np.inf,
+            _stimulus_sort_key(row["stimulus_a"]),
+            _stimulus_sort_key(row["stimulus_b"]),
+        ),
+    )
+
+
 def _assemble_nested_artifacts(outer_rows, inner_rows, selected_rows, prediction_rows, candidate_configs):
     group_summary_rows = summarize_nested_cross_subject_stimulus(
         outer_rows,
@@ -428,6 +469,7 @@ def _assemble_nested_artifacts(outer_rows, inner_rows, selected_rows, prediction
         signflip_seed=candidate_configs[0].signflip_seed,
     )
     confusion_rows, per_stimulus_rows = summarize_cross_subject_predictions(prediction_rows)
+    confusion_pair_rows = summarize_cross_subject_confusion_pairs(prediction_rows)
     return {
         "outer": outer_rows,
         "inner_validation": inner_rows,
@@ -436,6 +478,7 @@ def _assemble_nested_artifacts(outer_rows, inner_rows, selected_rows, prediction
         "group_summary": group_summary_rows,
         "confusion": confusion_rows,
         "per_stimulus": per_stimulus_rows,
+        "confusion_pairs": confusion_pair_rows,
     }
 
 
@@ -498,6 +541,7 @@ def _write_nested_output_rows(
     predictions_output_path=None,
     confusion_output_path=None,
     per_stimulus_output_path=None,
+    confusion_pairs_output_path=None,
 ):
     _write_rows_if_present(artifacts["outer"], outer_output_path)
     _write_rows_if_present(artifacts["group_summary"], group_summary_output_path)
@@ -506,6 +550,7 @@ def _write_nested_output_rows(
     _write_rows_if_present(artifacts["predictions"], predictions_output_path)
     _write_rows_if_present(artifacts["confusion"], confusion_output_path)
     _write_rows_if_present(artifacts["per_stimulus"], per_stimulus_output_path)
+    _write_rows_if_present(artifacts["confusion_pairs"], confusion_pairs_output_path)
 
 
 def _write_rows_if_present(rows, path):
@@ -522,7 +567,167 @@ def _rows_with_consistent_fields(rows):
     return [{key: row.get(key, "") for key in fieldnames} for row in rows]
 
 
-def export_cross_subject_stimulus_smoke(
+def _present_group_columns(frame):
+    return tuple(column for column in CROSS_SUBJECT_PREDICTION_GROUP_COLUMNS if column in frame.columns)
+
+
+def _iter_frame_groups(frame, group_columns):
+    if not group_columns:
+        yield (), frame
+        return
+    for group_key, group_frame in frame.groupby(list(group_columns), dropna=False, sort=True):
+        if len(group_columns) == 1:
+            group_key = (group_key,)
+        yield tuple(group_key), group_frame
+
+
+def _group_row(group_columns, group_key):
+    return dict(zip(group_columns, group_key))
+
+
+def _summarize_confusion_pairs_for_group(group_frame, group_values, metadata_by_stimulus):
+    true_counts = group_frame["true_stimulus"].value_counts(dropna=False).to_dict()
+    error_frame = group_frame[group_frame["true_stimulus"] != group_frame["predicted_stimulus"]]
+    if error_frame.empty:
+        return []
+
+    pair_counts, pair_participants, directional_participants = _confusion_pair_maps(error_frame)
+    return [
+        _confusion_pair_summary_row(
+            group_values,
+            stimulus_a,
+            stimulus_b,
+            counts,
+            true_counts,
+            pair_participants,
+            directional_participants,
+            metadata_by_stimulus,
+        )
+        for (stimulus_a, stimulus_b), counts in pair_counts.items()
+    ]
+
+
+def _confusion_pair_maps(error_frame):
+    pair_counts: dict[tuple, Counter] = {}
+    pair_participants: dict[tuple, set] = {}
+    directional_participants: dict[tuple, set] = {}
+    for _, row in error_frame.iterrows():
+        true_stimulus = row["true_stimulus"]
+        predicted_stimulus = row["predicted_stimulus"]
+        stimulus_a, stimulus_b = _ordered_stimulus_pair(true_stimulus, predicted_stimulus)
+        pair_counts.setdefault((stimulus_a, stimulus_b), Counter())
+        pair_participants.setdefault((stimulus_a, stimulus_b), set())
+        directional_participants.setdefault((stimulus_a, stimulus_b, true_stimulus, predicted_stimulus), set())
+        pair_counts[(stimulus_a, stimulus_b)][(true_stimulus, predicted_stimulus)] += 1
+        if "test_participant" in row:
+            participant = row["test_participant"]
+            pair_participants[(stimulus_a, stimulus_b)].add(participant)
+            directional_participants[(stimulus_a, stimulus_b, true_stimulus, predicted_stimulus)].add(participant)
+    return pair_counts, pair_participants, directional_participants
+
+
+def _confusion_pair_summary_row(
+    group_values,
+    stimulus_a,
+    stimulus_b,
+    counts,
+    true_counts,
+    pair_participants,
+    directional_participants,
+    metadata_by_stimulus,
+):
+    a_to_b_count = int(counts[(stimulus_a, stimulus_b)])
+    b_to_a_count = int(counts[(stimulus_b, stimulus_a)])
+    true_a_trials = int(true_counts.get(stimulus_a, 0))
+    true_b_trials = int(true_counts.get(stimulus_b, 0))
+    a_to_b_rate = _safe_rate(a_to_b_count, true_a_trials)
+    b_to_a_rate = _safe_rate(b_to_a_count, true_b_trials)
+    total_confusions = a_to_b_count + b_to_a_count
+    result = {
+        **group_values,
+        "stimulus_a": stimulus_a,
+        "stimulus_b": stimulus_b,
+        "a_to_b_count": a_to_b_count,
+        "b_to_a_count": b_to_a_count,
+        "total_confusions": total_confusions,
+        "true_a_trials": true_a_trials,
+        "true_b_trials": true_b_trials,
+        "a_to_b_rate": a_to_b_rate,
+        "b_to_a_rate": b_to_a_rate,
+        "mean_directional_rate": _nanmean_or_nan((a_to_b_rate, b_to_a_rate)),
+        "max_directional_rate": _nanmax_or_nan((a_to_b_rate, b_to_a_rate)),
+        "min_directional_rate": _nanmin_or_nan((a_to_b_rate, b_to_a_rate)),
+        "absolute_rate_asymmetry": _absolute_difference_or_nan(a_to_b_rate, b_to_a_rate),
+        "total_pair_error_rate": _safe_rate(total_confusions, true_a_trials + true_b_trials),
+        "symmetric_confusion_count": min(a_to_b_count, b_to_a_count),
+        "n_confused_participants": len(pair_participants.get((stimulus_a, stimulus_b), set())),
+        "a_to_b_participants": len(directional_participants.get((stimulus_a, stimulus_b, stimulus_a, stimulus_b), set())),
+        "b_to_a_participants": len(directional_participants.get((stimulus_a, stimulus_b, stimulus_b, stimulus_a), set())),
+    }
+    _add_stimulus_metadata(result, stimulus_a, stimulus_b, metadata_by_stimulus)
+    return result
+
+
+def _ordered_stimulus_pair(first, second):
+    return tuple(sorted((first, second), key=_stimulus_sort_key))
+
+
+def _stimulus_sort_key(value):
+    try:
+        return 0, int(value)
+    except (TypeError, ValueError):
+        return 1, str(value)
+
+
+def _stimulus_metadata_by_id(stimulus_metadata_rows):
+    metadata_by_stimulus: dict = {}
+    if not stimulus_metadata_rows:
+        return metadata_by_stimulus
+    for metadata_row in stimulus_metadata_rows:
+        stimulus = _metadata_stimulus_id(metadata_row)
+        if stimulus is not None:
+            metadata_by_stimulus[stimulus] = dict(metadata_row)
+    return metadata_by_stimulus
+
+
+def _metadata_stimulus_id(metadata_row):
+    for column in STIMULUS_METADATA_ID_COLUMNS:
+        value = metadata_row.get(column)
+        if value not in (None, ""):
+            return value
+    return None
+
+
+def _add_stimulus_metadata(row, stimulus_a, stimulus_b, metadata_by_stimulus):
+    metadata_a = _lookup_stimulus_metadata(metadata_by_stimulus, stimulus_a)
+    metadata_b = _lookup_stimulus_metadata(metadata_by_stimulus, stimulus_b)
+    if not metadata_a and not metadata_b:
+        return
+
+    metadata_keys = sorted((set(metadata_a) | set(metadata_b)) - set(STIMULUS_METADATA_ID_COLUMNS))
+    for key in metadata_keys:
+        value_a = metadata_a.get(key, "")
+        value_b = metadata_b.get(key, "")
+        row[f"stimulus_a_{key}"] = value_a
+        row[f"stimulus_b_{key}"] = value_b
+        if value_a != "" and value_b != "":
+            row[f"same_{key}"] = bool(value_a == value_b)
+
+
+def _lookup_stimulus_metadata(metadata_by_stimulus, stimulus):
+    if stimulus in metadata_by_stimulus:
+        return metadata_by_stimulus[stimulus]
+    stimulus_text = str(stimulus)
+    if stimulus_text in metadata_by_stimulus:
+        return metadata_by_stimulus[stimulus_text]
+    try:
+        stimulus_int = int(stimulus)
+    except (TypeError, ValueError):
+        return {}
+    return metadata_by_stimulus.get(stimulus_int, {})
+
+
+def export_cross_subject_stimulus_smoke(  # pylint: disable=too-many-arguments
     data_folder,
     participants,
     *,
@@ -531,6 +736,7 @@ def export_cross_subject_stimulus_smoke(
     predictions_output_path=None,
     confusion_output_path=None,
     per_stimulus_output_path=None,
+    confusion_pairs_output_path=None,
     config=None,
     progress=None,
 ):
@@ -546,6 +752,8 @@ def export_cross_subject_stimulus_smoke(
         write_alpha_metrics_csv(artifacts["confusion"], confusion_output_path)
     if per_stimulus_output_path:
         write_alpha_metrics_csv(artifacts["per_stimulus"], per_stimulus_output_path)
+    if confusion_pairs_output_path and artifacts["confusion_pairs"]:
+        write_alpha_metrics_csv(artifacts["confusion_pairs"], confusion_pairs_output_path)
     return artifacts
 
 
@@ -561,6 +769,7 @@ def export_nested_cross_subject_stimulus(  # pylint: disable=too-many-arguments
     predictions_output_path=None,
     confusion_output_path=None,
     per_stimulus_output_path=None,
+    confusion_pairs_output_path=None,
     resume=False,
     write_incremental=False,
     outer_participants=None,
@@ -589,6 +798,7 @@ def export_nested_cross_subject_stimulus(  # pylint: disable=too-many-arguments
             predictions_output_path=predictions_output_path,
             confusion_output_path=confusion_output_path,
             per_stimulus_output_path=per_stimulus_output_path,
+            confusion_pairs_output_path=confusion_pairs_output_path,
         )
 
     artifacts = evaluate_nested_cross_subject_stimulus(
@@ -1208,6 +1418,35 @@ def _nanmean_or_nan(values):
     if values.size == 0:
         return np.nan
     return float(np.mean(values))
+
+
+def _nanmax_or_nan(values):
+    values = np.asarray(values, dtype=float)
+    values = values[np.isfinite(values)]
+    if values.size == 0:
+        return np.nan
+    return float(np.max(values))
+
+
+def _nanmin_or_nan(values):
+    values = np.asarray(values, dtype=float)
+    values = values[np.isfinite(values)]
+    if values.size == 0:
+        return np.nan
+    return float(np.min(values))
+
+
+def _safe_rate(numerator, denominator):
+    denominator = float(denominator)
+    if denominator <= 0:
+        return np.nan
+    return float(numerator) / denominator
+
+
+def _absolute_difference_or_nan(first, second):
+    if not np.isfinite(first) or not np.isfinite(second):
+        return np.nan
+    return float(abs(first - second))
 
 
 def _sem_or_nan(values):

@@ -37,6 +37,7 @@ from pymegdec.stimulus_cross_subject import (
     export_cross_subject_stimulus_smoke,
     export_nested_cross_subject_stimulus,
     make_cross_subject_candidate_configs,
+    summarize_cross_subject_confusion_pairs,
     summarize_cross_subject_stimulus_smoke,
     summarize_nested_cross_subject_stimulus,
 )
@@ -104,6 +105,7 @@ __all__ = [
     "summarize_stimulus_onset_scan",
     "summarize_stimulus_prediction_diagnostics",
     "summarize_stimulus_temporal_generalization",
+    "summarize_cross_subject_confusion_pairs",
     "summarize_cross_subject_stimulus_smoke",
     "summarize_nested_cross_subject_stimulus",
     "summarize_alpha_movement_effects",

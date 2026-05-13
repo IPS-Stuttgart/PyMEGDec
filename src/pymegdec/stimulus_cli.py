@@ -6,6 +6,11 @@ import argparse
 from collections.abc import Sequence
 from dataclasses import replace
 
+from reptrace.decoding.robustness import (
+    RobustnessCondition,
+    run_participant_robustness_conditions,
+)
+
 from pymegdec.alpha_metrics import write_alpha_metrics_csv
 from pymegdec.cli import (
     normalize_argv,
@@ -54,10 +59,6 @@ from pymegdec.stimulus_decoding import (
     summarize_stimulus_decoding,
     summarize_stimulus_prediction_diagnostics,
     window_centers_from_range,
-)
-from reptrace.decoding.robustness import (
-    RobustnessCondition,
-    run_participant_robustness_conditions,
 )
 
 DEFAULT_PREDICTION_WINDOW_CENTERS = (-0.175, 0.175)
@@ -260,6 +261,7 @@ def _build_cross_subject_smoke_parser(prog: str | None = None) -> argparse.Argum
     parser.add_argument("--predictions-output", default="outputs/stimulus_cross_subject_predictions.csv", help="Trial prediction CSV.")
     parser.add_argument("--confusion-output", default="outputs/stimulus_cross_subject_confusion.csv", help="Confusion-count CSV.")
     parser.add_argument("--per-stimulus-output", default="outputs/stimulus_cross_subject_per_stimulus.csv", help="Per-stimulus recall CSV.")
+    parser.add_argument("--confusion-pairs-output", default="outputs/stimulus_cross_subject_confusion_pairs.csv", help="Bidirectional stimulus-pair confusion CSV.")
     return parser
 
 
@@ -293,6 +295,7 @@ def stimulus_cross_subject_smoke(argv: Sequence[str] | None = None, prog: str | 
         predictions_output_path=args.predictions_output,
         confusion_output_path=args.confusion_output,
         per_stimulus_output_path=args.per_stimulus_output,
+        confusion_pairs_output_path=args.confusion_pairs_output,
         config=config,
         progress=lambda message: print(message, flush=True),
     )
@@ -301,6 +304,7 @@ def stimulus_cross_subject_smoke(argv: Sequence[str] | None = None, prog: str | 
     print(f"Wrote {len(artifacts['predictions'])} trial prediction rows to {args.predictions_output}")
     print(f"Wrote {len(artifacts['confusion'])} confusion rows to {args.confusion_output}")
     print(f"Wrote {len(artifacts['per_stimulus'])} per-stimulus rows to {args.per_stimulus_output}")
+    print(f"Wrote {len(artifacts['confusion_pairs'])} confusion-pair rows to {args.confusion_pairs_output}")
     return 0
 
 
@@ -371,6 +375,7 @@ def _build_cross_subject_nested_parser(prog: str | None = None) -> argparse.Argu
     parser.add_argument("--predictions-output", default="outputs/stimulus_cross_subject_nested_predictions.csv", help="Trial prediction CSV.")
     parser.add_argument("--confusion-output", default="outputs/stimulus_cross_subject_nested_confusion.csv", help="Confusion-count CSV.")
     parser.add_argument("--per-stimulus-output", default="outputs/stimulus_cross_subject_nested_per_stimulus.csv", help="Per-stimulus recall CSV.")
+    parser.add_argument("--confusion-pairs-output", default="outputs/stimulus_cross_subject_nested_confusion_pairs.csv", help="Bidirectional stimulus-pair confusion CSV.")
     parser.add_argument("--resume", action="store_true", help="Skip outer participants already present in the existing nested output CSVs.")
     parser.add_argument("--write-incremental", action="store_true", help="Rewrite nested output CSVs after each completed outer participant.")
     return parser
@@ -410,6 +415,7 @@ def stimulus_cross_subject_nested(argv: Sequence[str] | None = None, prog: str |
         predictions_output_path=args.predictions_output,
         confusion_output_path=args.confusion_output,
         per_stimulus_output_path=args.per_stimulus_output,
+        confusion_pairs_output_path=args.confusion_pairs_output,
         resume=args.resume,
         write_incremental=args.write_incremental,
         outer_participants=outer_participants,
@@ -422,6 +428,7 @@ def stimulus_cross_subject_nested(argv: Sequence[str] | None = None, prog: str |
     print(f"Wrote {len(artifacts['predictions'])} trial prediction rows to {args.predictions_output}")
     print(f"Wrote {len(artifacts['confusion'])} confusion rows to {args.confusion_output}")
     print(f"Wrote {len(artifacts['per_stimulus'])} per-stimulus rows to {args.per_stimulus_output}")
+    print(f"Wrote {len(artifacts['confusion_pairs'])} confusion-pair rows to {args.confusion_pairs_output}")
     return 0
 
 
