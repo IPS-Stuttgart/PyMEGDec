@@ -35,6 +35,7 @@ from pymegdec.stimulus_cross_subject import (
     DEFAULT_CROSS_SUBJECT_PARTICIPANTS,
     DEFAULT_CROSS_SUBJECT_WINDOW_CENTER,
     DEFAULT_CROSS_SUBJECT_WINDOW_SIZE,
+    NORMALIZATION_MODES,
     CrossSubjectStimulusConfig,
     export_cross_subject_stimulus_smoke,
     export_nested_cross_subject_stimulus,
@@ -240,7 +241,7 @@ def _build_cross_subject_smoke_parser(prog: str | None = None) -> argparse.Argum
         "--normalization",
         type=_normalization_token,
         default=DEFAULT_CROSS_SUBJECT_NORMALIZATION,
-        choices=("none", "subject_z", "subject_baseline_z"),
+        choices=NORMALIZATION_MODES,
         help="Subject-level normalization mode.",
     )
     parser.add_argument("--classifier", default=DEFAULT_CROSS_SUBJECT_CLASSIFIER, help="Classifier name.")

@@ -37,7 +37,9 @@ DEFAULT_CROSS_SUBJECT_COMPONENTS_PCA = 64
 DEFAULT_CROSS_SUBJECT_NESTED_WINDOW_CENTERS = (0.150, 0.175, 0.200)
 DEFAULT_CROSS_SUBJECT_SELECTION_METRIC = "balanced_accuracy"
 FEATURE_MODES = ("sensor_mean", "sensor_flat")
-NORMALIZATION_MODES = ("none", "subject_z", "subject_baseline_z")
+NORMALIZATION_MODES = ("none", "subject_z", "subject_trial_z", "subject_baseline_z", "subject_baseline_whiten")
+BASELINE_WHITENING_SHRINKAGE = 0.1
+BASELINE_WHITENING_EIGENVALUE_FLOOR = 1e-6
 CROSS_SUBJECT_PREDICTION_GROUP_COLUMNS = (
     "window_center_s",
     "feature_mode",
@@ -79,6 +81,7 @@ class ParticipantFeatureSet:
     baseline_features: np.ndarray | None
     baseline_feature_mean: np.ndarray | None
     baseline_feature_std: np.ndarray | None
+    baseline_whitening_matrix: np.ndarray | None
     n_channels: int
     n_window_samples: int
     n_baseline_samples: int
@@ -251,10 +254,13 @@ def load_participant_stimulus_features(data_folder, participant, *, config=None)
     baseline_features = None
     baseline_feature_mean = None
     baseline_feature_std = None
+    baseline_whitening_matrix = None
     n_baseline_samples = 0
-    if config.normalization == "subject_baseline_z":
+    if config.normalization in ("subject_baseline_z", "subject_baseline_whiten"):
         baseline_feature_mean, baseline_feature_std, n_baseline_samples = _baseline_feature_statistics(data, config, n_window_samples, trial_indices)
-    normalized_features = _normalize_features(features, config, baseline_feature_mean, baseline_feature_std)
+    if config.normalization == "subject_baseline_whiten":
+        baseline_whitening_matrix, n_baseline_samples = _baseline_channel_whitening_matrix(data, config.baseline_window, trial_indices)
+    normalized_features = _normalize_features(features, config, baseline_feature_mean, baseline_feature_std, baseline_whitening_matrix)
     if labels.shape[0] != features.shape[0]:
         raise ValueError(f"Participant {participant} has {labels.shape[0]} labels but {features.shape[0]} feature rows.")
     return ParticipantFeatureSet(
@@ -265,6 +271,7 @@ def load_participant_stimulus_features(data_folder, participant, *, config=None)
         baseline_features=baseline_features,
         baseline_feature_mean=baseline_feature_mean,
         baseline_feature_std=baseline_feature_std,
+        baseline_whitening_matrix=baseline_whitening_matrix,
         n_channels=int(_trial_signal(data, 0).shape[0]),
         n_window_samples=int(n_window_samples),
         n_baseline_samples=int(n_baseline_samples),
@@ -1305,6 +1312,39 @@ def _baseline_channel_statistics(data, baseline_window, trial_indices):
     return mean, np.sqrt(variance), int(np.sum(mask))
 
 
+def _baseline_channel_whitening_matrix(data, baseline_window, trial_indices):
+    baseline_features, n_baseline_samples = _extract_window_features(data, baseline_window, feature_mode="sensor_mean", trial_indices=trial_indices)
+    covariance = _covariance_matrix(baseline_features)
+    covariance = _shrink_covariance(covariance, shrinkage=BASELINE_WHITENING_SHRINKAGE)
+    return _whitening_matrix(covariance), n_baseline_samples
+
+
+def _covariance_matrix(features):
+    features = np.asarray(features, dtype=float)
+    n_features = int(features.shape[1])
+    if features.shape[0] < 2:
+        return np.eye(n_features, dtype=float)
+    covariance = np.cov(features, rowvar=False)
+    covariance = np.asarray(covariance, dtype=float)
+    if covariance.ndim == 0:
+        covariance = covariance.reshape(1, 1)
+    return 0.5 * (covariance + covariance.T)
+
+
+def _shrink_covariance(covariance, *, shrinkage):
+    covariance = np.asarray(covariance, dtype=float)
+    diagonal = np.diag(np.diag(covariance))
+    return (1.0 - float(shrinkage)) * covariance + float(shrinkage) * diagonal
+
+
+def _whitening_matrix(covariance):
+    eigenvalues, eigenvectors = np.linalg.eigh(covariance)
+    eigen_floor = max(float(np.max(eigenvalues)) * BASELINE_WHITENING_EIGENVALUE_FLOOR, 1e-12)
+    inverse_sqrt = 1.0 / np.sqrt(np.maximum(eigenvalues, eigen_floor))
+    whitening = (eigenvectors * inverse_sqrt) @ eigenvectors.T
+    return 0.5 * (whitening + whitening.T)
+
+
 def _selected_trial_indices(labels, max_trials_per_class):
     labels = np.asarray(labels).ravel()
     if max_trials_per_class is None:
@@ -1394,17 +1434,23 @@ def _normalized_subject_features(feature_set, config):
         reference = feature_set.features
         mean = np.mean(reference, axis=0, keepdims=True)
         std = np.std(reference, axis=0, keepdims=True)
-    elif config.normalization == "subject_baseline_z":
+        return (feature_set.features - mean) / _nonzero_std(std)
+    if config.normalization == "subject_trial_z":
+        return _trial_zscore_features(feature_set.features)
+    if config.normalization == "subject_baseline_z":
         if feature_set.baseline_feature_mean is None or feature_set.baseline_feature_std is None:
             raise ValueError("subject_baseline_z requires baseline feature statistics.")
         mean = feature_set.baseline_feature_mean
         std = feature_set.baseline_feature_std
-    else:
-        raise ValueError(f"Unsupported normalization: {config.normalization}")
-    return (feature_set.features - mean) / std
+        return (feature_set.features - mean) / std
+    if config.normalization == "subject_baseline_whiten":
+        if feature_set.baseline_feature_mean is None or feature_set.baseline_whitening_matrix is None:
+            raise ValueError("subject_baseline_whiten requires baseline feature statistics and a whitening matrix.")
+        return _baseline_whiten_features(feature_set.features, config, feature_set.baseline_feature_mean, feature_set.baseline_whitening_matrix)
+    raise ValueError(f"Unsupported normalization: {config.normalization}")
 
 
-def _normalize_features(features, config, baseline_feature_mean, baseline_feature_std):
+def _normalize_features(features, config, baseline_feature_mean, baseline_feature_std, baseline_whitening_matrix):
     features = np.asarray(features, dtype=float)
     if config.normalization == "none":
         return features
@@ -1414,13 +1460,46 @@ def _normalize_features(features, config, baseline_feature_mean, baseline_featur
         features -= mean
         features /= std
         return features
+    if config.normalization == "subject_trial_z":
+        return _trial_zscore_features(features)
     if config.normalization == "subject_baseline_z":
         if baseline_feature_mean is None or baseline_feature_std is None:
             raise ValueError("subject_baseline_z requires baseline feature statistics.")
         features -= baseline_feature_mean
         features /= baseline_feature_std
         return features
+    if config.normalization == "subject_baseline_whiten":
+        if baseline_feature_mean is None or baseline_whitening_matrix is None:
+            raise ValueError("subject_baseline_whiten requires baseline feature statistics and a whitening matrix.")
+        return _baseline_whiten_features(features, config, baseline_feature_mean, baseline_whitening_matrix)
     raise ValueError(f"Unsupported normalization: {config.normalization}")
+
+
+def _trial_zscore_features(features):
+    features = np.asarray(features, dtype=float)
+    mean = np.mean(features, axis=1, keepdims=True)
+    std = _nonzero_std(np.std(features, axis=1, keepdims=True))
+    return (features - mean) / std
+
+
+def _baseline_whiten_features(features, config, baseline_feature_mean, baseline_whitening_matrix):
+    centered = np.asarray(features, dtype=float) - baseline_feature_mean
+    whitening_matrix = np.asarray(baseline_whitening_matrix, dtype=float)
+    if config.feature_mode == "sensor_mean":
+        return centered @ whitening_matrix.T
+    if config.feature_mode == "sensor_flat":
+        return _baseline_whiten_sensor_flat_features(centered, whitening_matrix)
+    raise ValueError(f"Unsupported feature_mode: {config.feature_mode}")
+
+
+def _baseline_whiten_sensor_flat_features(features, whitening_matrix):
+    n_channels = int(whitening_matrix.shape[0])
+    if features.shape[1] % n_channels:
+        raise ValueError("sensor_flat feature width must be a multiple of the number of whitening channels.")
+    n_window_samples = int(features.shape[1] // n_channels)
+    matrices = features.reshape(features.shape[0], n_window_samples, n_channels)
+    whitened = matrices @ whitening_matrix.T
+    return whitened.reshape(features.shape[0], -1)
 
 
 def _nonzero_std(std):

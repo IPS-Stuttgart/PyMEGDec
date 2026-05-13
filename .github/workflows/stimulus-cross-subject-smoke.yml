@@ -64,6 +64,8 @@ on:
         type: choice
         options:
           - subject_baseline_z
+          - subject_trial_z
+          - subject_baseline_whiten
           - subject_z
           - none
       classifier:
