@@ -38,6 +38,13 @@ Useful follow-up classifiers for this cross-subject benchmark are
 training-set class-average pattern, which is a simple baseline for shared
 stimulus topographies across participants.
 
+Supported cross-subject normalization modes are `none`, `subject_z`,
+`subject_trial_z`, `subject_baseline_z`, and `subject_baseline_whiten`.
+`subject_trial_z` normalizes each trial feature vector independently.
+`subject_baseline_whiten` estimates a shrinkage channel covariance from the
+baseline window and applies the resulting channel whitening transform to each
+stimulus-window feature vector.
+
 ## Nested cross-subject benchmark
 
 Use nested LOSO when choosing among windows, classifiers, or PCA settings. For
@@ -52,7 +59,7 @@ pymegdec stimulus cross-subject-nested \
   --window-centers 0.150,0.175,0.200 \
   --window-size 0.1 \
   --feature-modes sensor_flat \
-  --normalizations subject_baseline_z \
+  --normalizations subject_baseline_z,subject_trial_z,subject_baseline_whiten \
   --classifiers multinomial-logistic,shrinkage-lda,multiclass-svm \
   --classifier-params default \
   --components-pca-values 64 \

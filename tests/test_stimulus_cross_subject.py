@@ -36,6 +36,14 @@ def _mat_data(labels, values):
     }
 
 
+def _mat_data_from_trials(labels, trials, time):
+    return {
+        "trial": cell_array([np.asarray(trial, dtype=float) for trial in trials]),
+        "time": cell_array([np.asarray(time, dtype=float) for _ in trials]),
+        "trialinfo": np.array([[np.asarray(labels, dtype=int)]], dtype=object),
+    }
+
+
 def _loadmat_side_effect(data_by_participant):
     def loadmat(path):
         match = re.search(r"Part(\d+)Data\.mat$", str(path))
@@ -102,6 +110,57 @@ class TestStimulusCrossSubject(unittest.TestCase):
         self.assertEqual(feature_set.baseline_feature_std.shape, (1, 4))
         self.assertTrue(np.allclose(feature_set.baseline_feature_mean[0, :2], feature_set.baseline_feature_mean[0, 2:]))
         self.assertTrue(np.allclose(feature_set.baseline_feature_std[0, :2], feature_set.baseline_feature_std[0, 2:]))
+
+    def test_sensor_flat_subject_trial_z_normalizes_each_trial(self):
+        time = np.asarray([-0.5, 0.0, 0.1, 0.2], dtype=float)
+        trials = [
+            [[0.0, 0.0, 1.0, 2.0], [0.0, 0.0, 3.0, 5.0]],
+            [[0.0, 0.0, 2.0, 4.0], [0.0, 0.0, 6.0, 10.0]],
+        ]
+        data_by_participant = {1: _mat_data_from_trials([1, 2], trials, time)}
+        config = CrossSubjectStimulusConfig(
+            window_center=0.15,
+            window_size=0.1,
+            feature_mode="sensor_flat",
+            normalization="subject_trial_z",
+            components_pca=float("inf"),
+            chance_classes=2,
+        )
+
+        with patch("pymegdec.stimulus_cross_subject.sio.loadmat", side_effect=_loadmat_side_effect(data_by_participant)):
+            feature_set = load_participant_stimulus_features("unused", 1, config=config)
+
+        self.assertEqual(feature_set.features.shape, (2, 4))
+        self.assertTrue(np.allclose(np.mean(feature_set.features, axis=1), 0.0))
+        self.assertTrue(np.allclose(np.std(feature_set.features, axis=1), 1.0))
+
+    def test_sensor_flat_subject_baseline_whiten_uses_channel_covariance(self):
+        time = np.asarray([-0.5, 0.0, 0.1, 0.2], dtype=float)
+        trials = [
+            [[-1.0, -0.8, 1.0, 1.2], [0.5, 0.7, 3.0, 3.2]],
+            [[-0.4, -0.2, 2.0, 2.2], [1.1, 1.3, 4.0, 4.2]],
+            [[0.2, 0.4, 3.0, 3.2], [1.7, 1.9, 5.0, 5.2]],
+            [[0.8, 1.0, 4.0, 4.2], [2.3, 2.5, 6.0, 6.2]],
+        ]
+        data_by_participant = {1: _mat_data_from_trials([1, 2, 1, 2], trials, time)}
+        config = CrossSubjectStimulusConfig(
+            window_center=0.15,
+            window_size=0.1,
+            feature_mode="sensor_flat",
+            normalization="subject_baseline_whiten",
+            components_pca=float("inf"),
+            chance_classes=2,
+        )
+
+        with patch("pymegdec.stimulus_cross_subject.sio.loadmat", side_effect=_loadmat_side_effect(data_by_participant)):
+            feature_set = load_participant_stimulus_features("unused", 1, config=config)
+
+        self.assertEqual(feature_set.features.shape, (4, 4))
+        self.assertEqual(feature_set.baseline_feature_mean.shape, (1, 4))
+        self.assertEqual(feature_set.baseline_whitening_matrix.shape, (2, 2))
+        self.assertEqual(feature_set.n_baseline_samples, 2)
+        self.assertTrue(np.allclose(feature_set.baseline_whitening_matrix, feature_set.baseline_whitening_matrix.T))
+        self.assertTrue(np.all(np.isfinite(feature_set.features)))
 
     def test_load_participant_stimulus_features_can_cap_trials_per_class(self):
         data_by_participant = {1: _mat_data([1, 2, 1, 2, 1, 2], [-1.0, 1.0, -0.9, 0.9, -0.8, 0.8])}
