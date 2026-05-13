@@ -592,6 +592,7 @@ def _summarize_confusion_pairs_for_group(group_frame, group_values, metadata_by_
         return []
 
     pair_counts, pair_participants, directional_participants = _confusion_pair_maps(error_frame)
+    error_marginals = _confusion_error_marginals(error_frame)
     return [
         _confusion_pair_summary_row(
             group_values,
@@ -599,6 +600,7 @@ def _summarize_confusion_pairs_for_group(group_frame, group_values, metadata_by_
             stimulus_b,
             counts,
             true_counts,
+            error_marginals,
             pair_participants,
             directional_participants,
             metadata_by_stimulus,
@@ -626,12 +628,21 @@ def _confusion_pair_maps(error_frame):
     return pair_counts, pair_participants, directional_participants
 
 
+def _confusion_error_marginals(error_frame):
+    return {
+        "true_counts": error_frame["true_stimulus"].value_counts(dropna=False).to_dict(),
+        "predicted_counts": error_frame["predicted_stimulus"].value_counts(dropna=False).to_dict(),
+        "total": int(len(error_frame)),
+    }
+
+
 def _confusion_pair_summary_row(
     group_values,
     stimulus_a,
     stimulus_b,
     counts,
     true_counts,
+    error_marginals,
     pair_participants,
     directional_participants,
     metadata_by_stimulus,
@@ -643,6 +654,7 @@ def _confusion_pair_summary_row(
     a_to_b_rate = _safe_rate(a_to_b_count, true_a_trials)
     b_to_a_rate = _safe_rate(b_to_a_count, true_b_trials)
     total_confusions = a_to_b_count + b_to_a_count
+    bias_metrics = _confusion_pair_bias_metrics(stimulus_a, stimulus_b, a_to_b_count, b_to_a_count, error_marginals)
     result = {
         **group_values,
         "stimulus_a": stimulus_a,
@@ -659,6 +671,7 @@ def _confusion_pair_summary_row(
         "min_directional_rate": _nanmin_or_nan((a_to_b_rate, b_to_a_rate)),
         "absolute_rate_asymmetry": _absolute_difference_or_nan(a_to_b_rate, b_to_a_rate),
         "total_pair_error_rate": _safe_rate(total_confusions, true_a_trials + true_b_trials),
+        **bias_metrics,
         "symmetric_confusion_count": min(a_to_b_count, b_to_a_count),
         "n_confused_participants": len(pair_participants.get((stimulus_a, stimulus_b), set())),
         "a_to_b_participants": len(directional_participants.get((stimulus_a, stimulus_b, stimulus_a, stimulus_b), set())),
@@ -666,6 +679,34 @@ def _confusion_pair_summary_row(
     }
     _add_stimulus_metadata(result, stimulus_a, stimulus_b, metadata_by_stimulus)
     return result
+
+
+def _confusion_pair_bias_metrics(stimulus_a, stimulus_b, a_to_b_count, b_to_a_count, error_marginals):
+    true_error_counts = error_marginals["true_counts"]
+    predicted_error_counts = error_marginals["predicted_counts"]
+    total_errors = error_marginals["total"]
+    true_a_error_count = int(true_error_counts.get(stimulus_a, 0))
+    true_b_error_count = int(true_error_counts.get(stimulus_b, 0))
+    predicted_a_error_count = int(predicted_error_counts.get(stimulus_a, 0))
+    predicted_b_error_count = int(predicted_error_counts.get(stimulus_b, 0))
+    expected_a_to_b_count = _expected_confusion_count(true_a_error_count, predicted_b_error_count, total_errors)
+    expected_b_to_a_count = _expected_confusion_count(true_b_error_count, predicted_a_error_count, total_errors)
+    expected_total_confusions = expected_a_to_b_count + expected_b_to_a_count
+    total_confusions = a_to_b_count + b_to_a_count
+    return {
+        "true_a_error_count": true_a_error_count,
+        "true_b_error_count": true_b_error_count,
+        "predicted_a_error_count": predicted_a_error_count,
+        "predicted_b_error_count": predicted_b_error_count,
+        "expected_a_to_b_count": expected_a_to_b_count,
+        "expected_b_to_a_count": expected_b_to_a_count,
+        "expected_total_confusions": expected_total_confusions,
+        "a_to_b_lift": _safe_rate(a_to_b_count, expected_a_to_b_count),
+        "b_to_a_lift": _safe_rate(b_to_a_count, expected_b_to_a_count),
+        "pair_confusion_lift": _safe_rate(total_confusions, expected_total_confusions),
+        "total_confusion_excess": _difference_or_nan(total_confusions, expected_total_confusions),
+        "pair_standardized_residual": _standardized_residual(total_confusions, expected_total_confusions),
+    }
 
 
 def _ordered_stimulus_pair(first, second):
@@ -1441,6 +1482,25 @@ def _safe_rate(numerator, denominator):
     if denominator <= 0:
         return np.nan
     return float(numerator) / denominator
+
+
+def _expected_confusion_count(true_error_count, predicted_error_count, total_errors):
+    total_errors = float(total_errors)
+    if total_errors <= 0:
+        return np.nan
+    return float(true_error_count) * float(predicted_error_count) / total_errors
+
+
+def _difference_or_nan(first, second):
+    if not np.isfinite(first) or not np.isfinite(second):
+        return np.nan
+    return float(first - second)
+
+
+def _standardized_residual(observed, expected):
+    if not np.isfinite(expected) or expected <= 0:
+        return np.nan
+    return float(observed - expected) / float(np.sqrt(expected))
 
 
 def _absolute_difference_or_nan(first, second):

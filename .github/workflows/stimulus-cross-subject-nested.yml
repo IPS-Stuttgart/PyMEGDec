@@ -211,7 +211,7 @@ jobs:
           summary = next(csv.DictReader(summary_path.open(newline="", encoding="utf-8")))
           selected_rows = list(csv.DictReader(selected_path.open(newline="", encoding="utf-8")))
           pair_rows = list(csv.DictReader(pairs_path.open(newline="", encoding="utf-8"))) if pairs_path.exists() else []
-          top_pairs = sorted(pair_rows, key=lambda row: int(row["total_confusions"]), reverse=True)[:5]
+          top_pairs = sorted(pair_rows, key=lambda row: float(row.get("pair_standardized_residual") or row["total_confusions"]), reverse=True)[:5]
           lines = [
               "# Stimulus cross-subject nested",
               "",
@@ -242,11 +242,20 @@ jobs:
                   f"{float(row['selected_window_center_s']):.3f} | {100.0 * float(row['selected_inner_balanced_accuracy_mean']):.2f}% |"
               )
           if top_pairs:
-              lines.extend(["", "## Top confusion pairs", "", "| stimulus A | stimulus B | total errors | A->B rate | B->A rate | participants |", "| ---: | ---: | ---: | ---: | ---: | ---: |"])
+              lines.extend(
+                  [
+                      "",
+                      "## Top bias-corrected confusion pairs",
+                      "",
+                      "| stimulus A | stimulus B | observed errors | expected errors | lift | residual | participants |",
+                      "| ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
+                  ]
+              )
               for row in top_pairs:
                   lines.append(
                       f"| {row['stimulus_a']} | {row['stimulus_b']} | {row['total_confusions']} | "
-                      f"{100.0 * float(row['a_to_b_rate']):.2f}% | {100.0 * float(row['b_to_a_rate']):.2f}% | {row['n_confused_participants']} |"
+                      f"{float(row['expected_total_confusions']):.1f} | {float(row['pair_confusion_lift']):.2f} | "
+                      f"{float(row['pair_standardized_residual']):.2f} | {row['n_confused_participants']} |"
                   )
           Path(__import__("os").environ["GITHUB_STEP_SUMMARY"]).write_text("\n".join(lines) + "\n", encoding="utf-8")
           PY
