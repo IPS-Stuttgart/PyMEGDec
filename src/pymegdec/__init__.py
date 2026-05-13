@@ -30,6 +30,16 @@ from pymegdec.reaction_time_analysis import (
     analyze_alpha_reaction_times,
     join_alpha_reaction_times,
 )
+from pymegdec.stimulus_cross_subject import (
+    CrossSubjectStimulusConfig,
+    evaluate_cross_subject_stimulus_smoke,
+    evaluate_nested_cross_subject_stimulus,
+    export_cross_subject_stimulus_smoke,
+    export_nested_cross_subject_stimulus,
+    make_cross_subject_candidate_configs,
+    summarize_cross_subject_stimulus_smoke,
+    summarize_nested_cross_subject_stimulus,
+)
 from pymegdec.stimulus_decoding import (
     TRANSFER_DIRECTIONS,
     StimulusDecodingConfig,
@@ -46,16 +56,6 @@ from pymegdec.stimulus_decoding import (
     summarize_stimulus_onset_scan,
     summarize_stimulus_prediction_diagnostics,
     summarize_stimulus_temporal_generalization,
-)
-from pymegdec.stimulus_cross_subject import (
-    CrossSubjectStimulusConfig,
-    evaluate_cross_subject_stimulus_smoke,
-    evaluate_nested_cross_subject_stimulus,
-    export_cross_subject_stimulus_smoke,
-    export_nested_cross_subject_stimulus,
-    make_cross_subject_candidate_configs,
-    summarize_cross_subject_stimulus_smoke,
-    summarize_nested_cross_subject_stimulus,
 )
 
 __version__ = "0.1.0"

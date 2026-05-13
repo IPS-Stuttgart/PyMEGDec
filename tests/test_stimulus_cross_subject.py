@@ -5,7 +5,6 @@ from pathlib import Path
 from unittest.mock import patch
 
 import numpy as np
-
 from pymegdec import stimulus_cross_subject as cross_subject
 from pymegdec.stimulus_cross_subject import (
     CrossSubjectStimulusConfig,
