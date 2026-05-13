@@ -196,6 +196,7 @@ jobs:
           set -euo pipefail
           python - <<'PY'
           import csv
+          import math
           from pathlib import Path
 
           summary_path = Path("outputs/stimulus_cross_subject_nested_group_summary.csv")
@@ -212,6 +213,25 @@ jobs:
           selected_rows = list(csv.DictReader(selected_path.open(newline="", encoding="utf-8")))
           pair_rows = list(csv.DictReader(pairs_path.open(newline="", encoding="utf-8"))) if pairs_path.exists() else []
           top_pairs = sorted(pair_rows, key=lambda row: float(row.get("pair_standardized_residual") or row["total_confusions"]), reverse=True)[:5]
+
+          def percent_summary(key):
+              try:
+                  value = float(summary.get(key, "nan"))
+              except ValueError:
+                  return "n/a"
+              if not math.isfinite(value):
+                  return "n/a"
+              return f"{100.0 * value:.2f}%"
+
+          def percent_row(row, key):
+              try:
+                  value = float(row.get(key, "nan"))
+              except ValueError:
+                  return "n/a"
+              if not math.isfinite(value):
+                  return "n/a"
+              return f"{100.0 * value:.2f}%"
+
           lines = [
               "# Stimulus cross-subject nested",
               "",
@@ -222,6 +242,14 @@ jobs:
               f"| outer folds | {summary['n_outer_folds']} |",
               f"| candidates | {summary['n_candidates']} |",
               f"| trial cap counts | {summary.get('max_trials_per_class_per_participant_counts', '')} |",
+              f"| selected classifier counts | {summary.get('selected_classifier_counts', '')} |",
+              f"| selected window center counts | {summary.get('selected_window_center_counts', '')} |",
+              f"| selected feature mode counts | {summary.get('selected_feature_mode_counts', '')} |",
+              f"| selected normalization counts | {summary.get('selected_normalization_counts', '')} |",
+              f"| selected PCA component counts | {summary.get('selected_components_pca_counts', '')} |",
+              f"| inner winner margin mean | {percent_summary('inner_winner_margin_mean')} |",
+              f"| inner winner margin median | {percent_summary('inner_winner_margin_median')} |",
+              f"| inner winner margin min | {percent_summary('inner_winner_margin_min')} |",
               f"| chance | {float(summary['chance_percent']):.2f}% |",
               f"| mean balanced accuracy | {float(summary['balanced_percent_mean']):.2f}% |",
               f"| balanced accuracy SEM | {float(summary['balanced_percent_sem']):.2f}% |",
@@ -233,13 +261,15 @@ jobs:
               "",
               "## Selected candidates",
               "",
-              "| participant | candidate | classifier | window center | inner balanced accuracy |",
-              "| ---: | ---: | --- | ---: | ---: |",
+              "| participant | candidate | classifier | window center | inner balanced accuracy | winner margin |",
+              "| ---: | ---: | --- | ---: | ---: | ---: |",
           ]
           for row in selected_rows:
               lines.append(
                   f"| {row['test_participant']} | {row['selected_candidate_index']} | {row['selected_classifier']} | "
-                  f"{float(row['selected_window_center_s']):.3f} | {100.0 * float(row['selected_inner_balanced_accuracy_mean']):.2f}% |"
+                  f"{float(row['selected_window_center_s']):.3f} | "
+                  f"{100.0 * float(row['selected_inner_balanced_accuracy_mean']):.2f}% | "
+                  f"{percent_row(row, 'selected_inner_winner_margin')} |"
               )
           if top_pairs:
               lines.extend(
