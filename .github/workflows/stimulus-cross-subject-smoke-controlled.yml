@@ -1,0 +1,179 @@
+name: Manual stimulus cross-subject smoke controlled
+
+on:
+  workflow_dispatch:
+    inputs:
+      runner_label:
+        description: Runner label used for the benchmark.
+        required: true
+        default: self-hosted
+        type: string
+      python_version:
+        description: Python version used for the analysis environment.
+        required: true
+        default: "3.13"
+        type: string
+      data_dir:
+        description: Directory containing the prepared Part*Data.mat files.
+        required: true
+        default: .cache/meg-data-main
+        type: string
+      participants:
+        description: Participant ids such as 1-4,6,8.
+        required: true
+        default: "1-4,6,8,9,10,13-27"
+        type: string
+      window_center:
+        description: Stimulus decoding window center in seconds.
+        required: true
+        default: "0.175"
+        type: string
+      window_size:
+        description: Stimulus decoding window size in seconds.
+        required: true
+        default: "0.1"
+        type: string
+      baseline_window:
+        description: Baseline normalization window as start,stop in seconds.
+        required: true
+        default: "-0.5,0.0"
+        type: string
+      feature_mode:
+        description: Feature mode.
+        required: true
+        default: sensor_mean
+        type: choice
+        options: [sensor_mean, sensor_flat]
+      normalization:
+        description: Subject normalization mode.
+        required: true
+        default: subject_baseline_z
+        type: choice
+        options: [subject_baseline_z, subject_z, none]
+      classifier:
+        description: Classifier name.
+        required: true
+        default: multiclass-svm
+        type: string
+      components_pca:
+        description: Number of PCA components, or inf.
+        required: true
+        default: "64"
+        type: string
+      label_control:
+        description: Training-label control applied only to training participants.
+        required: true
+        default: none
+        type: choice
+        options: [none, shuffle-within-subject, circular-shift-within-subject]
+      label_control_seed:
+        description: Seed for training-label controls.
+        required: true
+        default: "0"
+        type: string
+
+permissions:
+  contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+jobs:
+  cross-subject-smoke-controlled:
+    name: Cross-subject smoke controlled
+    runs-on: ${{ inputs.runner_label }}
+    timeout-minutes: 720
+    env:
+      DATA_DIR: ${{ inputs.data_dir }}
+      PARTICIPANTS: ${{ inputs.participants }}
+      WINDOW_CENTER: ${{ inputs.window_center }}
+      WINDOW_SIZE: ${{ inputs.window_size }}
+      BASELINE_WINDOW: ${{ inputs.baseline_window }}
+      FEATURE_MODE: ${{ inputs.feature_mode }}
+      NORMALIZATION: ${{ inputs.normalization }}
+      CLASSIFIER: ${{ inputs.classifier }}
+      COMPONENTS_PCA: ${{ inputs.components_pca }}
+      LABEL_CONTROL: ${{ inputs.label_control }}
+      LABEL_CONTROL_SEED: ${{ inputs.label_control_seed }}
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: ${{ inputs.python_version }}
+
+      - name: Install package
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          python -m pip install .
+
+      - name: Validate main data files
+        shell: bash
+        run: |
+          set -euo pipefail
+          main_count="$(find -L "${DATA_DIR}" -name 'Part*Data.mat' ! -name 'Part*CueData.mat' | wc -l | tr -d ' ')"
+          echo "Main files: ${main_count}"
+          test "${main_count}" -ge 23
+
+      - name: Run controlled fixed-pipeline cross-subject smoke
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p outputs
+          python scripts/export_stimulus_cross_subject_smoke_controlled.py \
+            --data-dir "${DATA_DIR}" \
+            --participants "${PARTICIPANTS}" \
+            --window-center "${WINDOW_CENTER}" \
+            --window-size "${WINDOW_SIZE}" \
+            --baseline-window "${BASELINE_WINDOW}" \
+            --feature-mode "${FEATURE_MODE}" \
+            --normalization "${NORMALIZATION}" \
+            --classifier "${CLASSIFIER}" \
+            --components-pca "${COMPONENTS_PCA}" \
+            --label-control "${LABEL_CONTROL}" \
+            --label-control-seed "${LABEL_CONTROL_SEED}" \
+            --outer-output outputs/stimulus_cross_subject_controlled_outer.csv \
+            --summary-output outputs/stimulus_cross_subject_controlled_group_summary.csv \
+            --predictions-output outputs/stimulus_cross_subject_controlled_predictions.csv \
+            --confusion-output outputs/stimulus_cross_subject_controlled_confusion.csv \
+            --per-stimulus-output outputs/stimulus_cross_subject_controlled_per_stimulus.csv \
+            --confusion-pairs-output outputs/stimulus_cross_subject_controlled_confusion_pairs.csv
+
+      - name: Append workflow summary
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import csv
+          from pathlib import Path
+          summary = next(csv.DictReader(Path("outputs/stimulus_cross_subject_controlled_group_summary.csv").open(newline="", encoding="utf-8")))
+          lines = [
+              "# Stimulus cross-subject smoke controlled",
+              "",
+              "Training-label controls affect only training participants; held-out labels remain untouched.",
+              "",
+              "| metric | value |",
+              "| --- | ---: |",
+              f"| label control | {summary.get('label_control', '')} |",
+              f"| folds | {summary['n_outer_folds']} |",
+              f"| chance | {float(summary['chance_percent']):.2f}% |",
+              f"| mean balanced accuracy | {float(summary['balanced_percent_mean']):.2f}% |",
+              f"| balanced accuracy SEM | {float(summary['balanced_percent_sem']):.2f}% |",
+              f"| participants above chance | {summary['participants_above_chance']} |",
+              f"| one-sided exact sign p | {float(summary.get('one_sided_exact_sign_p_value', 'nan')):.4g} |",
+              f"| one-sided sign-flip p | {float(summary['one_sided_signflip_p_value']):.4g} |",
+          ]
+          Path(__import__("os").environ["GITHUB_STEP_SUMMARY"]).write_text("\n".join(lines) + "\n", encoding="utf-8")
+          PY
+
+      - name: Upload controlled cross-subject smoke outputs
+        uses: actions/upload-artifact@v7
+        with:
+          name: stimulus-cross-subject-smoke-controlled-outputs
+          path: outputs/stimulus_cross_subject_controlled_*.csv
+          if-no-files-found: warn
