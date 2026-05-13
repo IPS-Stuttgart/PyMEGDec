@@ -1,10 +1,24 @@
 name: Manual stimulus cross-subject smoke controlled
+#checkov:skip=CKV_GHA_7:Manual workflow inputs are constrained to analysis parameters and used only after shell quoting.
 
 on:
   workflow_dispatch:
     inputs:
-      runner_label:
-        description: Runner label used for the benchmark.
+      runner_type:
+        description: Runner backend used for the controlled smoke benchmark.
+        required: true
+        default: github-hosted
+        type: choice
+        options:
+          - github-hosted
+          - self-hosted
+      github_runner_label:
+        description: GitHub-hosted runner label used when runner_type=github-hosted.
+        required: true
+        default: ubuntu-latest
+        type: string
+      self_hosted_runner_label:
+        description: Self-hosted runner label used when runner_type=self-hosted.
         required: true
         default: self-hosted
         type: string
@@ -13,8 +27,18 @@ on:
         required: true
         default: "3.13"
         type: string
+      use_nextcloud_data:
+        description: Restore/download/cache the MEG data before running.
+        required: true
+        default: true
+        type: boolean
+      data_cache_version:
+        description: MEG data cache version.
+        required: true
+        default: v2
+        type: string
       data_dir:
-        description: Directory containing the prepared Part*Data.mat files.
+        description: Relative directory to restore/populate with Part*Data.mat files.
         required: true
         default: .cache/meg-data-main
         type: string
@@ -43,13 +67,20 @@ on:
         required: true
         default: sensor_mean
         type: choice
-        options: [sensor_mean, sensor_flat]
+        options:
+          - sensor_mean
+          - sensor_flat
       normalization:
         description: Subject normalization mode.
         required: true
         default: subject_baseline_z
         type: choice
-        options: [subject_baseline_z, subject_z, none]
+        options:
+          - subject_baseline_z
+          - subject_trial_z
+          - subject_baseline_whiten
+          - subject_z
+          - none
       classifier:
         description: Classifier name.
         required: true
@@ -65,7 +96,10 @@ on:
         required: true
         default: none
         type: choice
-        options: [none, shuffle-within-subject, circular-shift-within-subject]
+        options:
+          - none
+          - shuffle-within-subject
+          - circular-shift-within-subject
       label_control_seed:
         description: Seed for training-label controls.
         required: true
@@ -81,10 +115,12 @@ env:
 jobs:
   cross-subject-smoke-controlled:
     name: Cross-subject smoke controlled
-    runs-on: ${{ inputs.runner_label }}
+    runs-on: ${{ inputs.runner_type == 'github-hosted' && inputs.github_runner_label || inputs.self_hosted_runner_label }}
     timeout-minutes: 720
     env:
       DATA_DIR: ${{ inputs.data_dir }}
+      USE_NEXTCLOUD_DATA: ${{ inputs.use_nextcloud_data }}
+      DATA_CACHE_VERSION: ${{ inputs.data_cache_version }}
       PARTICIPANTS: ${{ inputs.participants }}
       WINDOW_CENTER: ${{ inputs.window_center }}
       WINDOW_SIZE: ${{ inputs.window_size }}
@@ -95,10 +131,31 @@ jobs:
       COMPONENTS_PCA: ${{ inputs.components_pca }}
       LABEL_CONTROL: ${{ inputs.label_control }}
       LABEL_CONTROL_SEED: ${{ inputs.label_control_seed }}
+      MAIN_FILE_NAMES: >-
+        Part1Data.mat,Part2Data.mat,Part3Data.mat,Part4Data.mat,Part6Data.mat,
+        Part8Data.mat,Part9Data.mat,Part10Data.mat,Part13Data.mat,Part14Data.mat,
+        Part15Data.mat,Part16Data.mat,Part17Data.mat,Part18Data.mat,Part19Data.mat,
+        Part20Data.mat,Part21Data.mat,Part22Data.mat,Part23Data.mat,Part24Data.mat,
+        Part25Data.mat,Part26Data.mat,Part27Data.mat
 
     steps:
       - name: Check out repository
         uses: actions/checkout@v6
+
+      - name: Prepare main MEG data
+        if: ${{ env.USE_NEXTCLOUD_DATA == 'true' }}
+        timeout-minutes: 90
+        uses: ./.github/actions/prepare-meg-data
+        with:
+          data-dir: ${{ env.DATA_DIR }}
+          cache-version: ${{ env.DATA_CACHE_VERSION }}
+          cache-key: meg-data-main-${{ runner.os }}-${{ env.DATA_CACHE_VERSION }}
+          file-names: ${{ env.MAIN_FILE_NAMES }}
+          require-cue-files: "false"
+          expected-main-files: "23"
+          webdav-url: ${{ secrets.BUSHMEG_WEBDAV_URL }}
+          webdav-user: ${{ secrets.BUSHMEG_DATA_KEY }}
+          webdav-password: ${{ secrets.BUSHMEG_DATA_PASSWORD }}
 
       - name: Set up Python
         uses: actions/setup-python@v6
