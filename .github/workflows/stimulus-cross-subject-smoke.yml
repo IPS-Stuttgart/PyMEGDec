@@ -34,10 +34,18 @@ on:
         required: true
         default: "1-4,6,8,9,10,13-27"
         type: string
-      window_center:
-        description: Stimulus decoding window center in seconds.
+      benchmark_mode:
+        description: Named benchmark preset for output labels and default timing.
         required: true
-        default: "0.175"
+        default: poststimulus
+        type: choice
+        options:
+          - poststimulus
+          - prestimulus-control
+      window_center:
+        description: Stimulus decoding window center in seconds. Leave empty to use the benchmark-mode preset.
+        required: true
+        default: ""
         type: string
       window_size:
         description: Stimulus decoding window size in seconds.
@@ -95,6 +103,7 @@ jobs:
       USE_NEXTCLOUD_DATA: ${{ inputs.use_nextcloud_data }}
       DATA_CACHE_VERSION: ${{ inputs.data_cache_version }}
       PARTICIPANTS: ${{ inputs.participants }}
+      BENCHMARK_MODE: ${{ inputs.benchmark_mode }}
       WINDOW_CENTER: ${{ inputs.window_center }}
       WINDOW_SIZE: ${{ inputs.window_size }}
       BASELINE_WINDOW: ${{ inputs.baseline_window }}
@@ -153,22 +162,29 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p outputs
+          analysis_label="${BENCHMARK_MODE//-/_}"
+          if [[ "${BENCHMARK_MODE}" == "prestimulus-control" ]]; then
+            default_window_center="-0.175"
+          else
+            default_window_center="0.175"
+          fi
+          window_center="${WINDOW_CENTER:-${default_window_center}}"
           python scripts/export_stimulus_cross_subject_smoke.py \
             --data-dir "${DATA_DIR}" \
             --participants "${PARTICIPANTS}" \
-            --window-center "${WINDOW_CENTER}" \
+            --window-center "${window_center}" \
             --window-size "${WINDOW_SIZE}" \
             --baseline-window "${BASELINE_WINDOW}" \
             --feature-mode "${FEATURE_MODE}" \
             --normalization "${NORMALIZATION}" \
             --classifier "${CLASSIFIER}" \
             --components-pca "${COMPONENTS_PCA}" \
-            --outer-output outputs/stimulus_cross_subject_outer.csv \
-            --summary-output outputs/stimulus_cross_subject_group_summary.csv \
-            --predictions-output outputs/stimulus_cross_subject_predictions.csv \
-            --confusion-output outputs/stimulus_cross_subject_confusion.csv \
-            --per-stimulus-output outputs/stimulus_cross_subject_per_stimulus.csv \
-            --confusion-pairs-output outputs/stimulus_cross_subject_confusion_pairs.csv
+            --outer-output "outputs/stimulus_cross_subject_${analysis_label}_outer.csv" \
+            --summary-output "outputs/stimulus_cross_subject_${analysis_label}_group_summary.csv" \
+            --predictions-output "outputs/stimulus_cross_subject_${analysis_label}_predictions.csv" \
+            --confusion-output "outputs/stimulus_cross_subject_${analysis_label}_confusion.csv" \
+            --per-stimulus-output "outputs/stimulus_cross_subject_${analysis_label}_per_stimulus.csv" \
+            --confusion-pairs-output "outputs/stimulus_cross_subject_${analysis_label}_confusion_pairs.csv"
 
       - name: Append workflow summary
         shell: bash
@@ -176,11 +192,14 @@ jobs:
           set -euo pipefail
           python - <<'PY'
           import csv
+          import os
           from pathlib import Path
 
-          summary_path = Path("outputs/stimulus_cross_subject_group_summary.csv")
-          outer_path = Path("outputs/stimulus_cross_subject_outer.csv")
-          pairs_path = Path("outputs/stimulus_cross_subject_confusion_pairs.csv")
+          benchmark_mode = os.environ["BENCHMARK_MODE"]
+          analysis_label = benchmark_mode.replace("-", "_")
+          summary_path = Path(f"outputs/stimulus_cross_subject_{analysis_label}_group_summary.csv")
+          outer_path = Path(f"outputs/stimulus_cross_subject_{analysis_label}_outer.csv")
+          pairs_path = Path(f"outputs/stimulus_cross_subject_{analysis_label}_confusion_pairs.csv")
           summary = next(csv.DictReader(summary_path.open(newline="", encoding="utf-8")))
           outer_rows = list(csv.DictReader(outer_path.open(newline="", encoding="utf-8")))
           best = sorted(outer_rows, key=lambda row: float(row["balanced_accuracy"]), reverse=True)[:5]
@@ -189,13 +208,16 @@ jobs:
           top_pairs = sorted(pair_rows, key=lambda row: float(row.get("pair_standardized_residual") or row["total_confusions"]), reverse=True)[:5]
 
           lines = [
-              "# Stimulus cross-subject smoke",
+              f"# Stimulus cross-subject smoke: {benchmark_mode}",
               "",
               "Fixed-pipeline leave-one-subject-out image-identity decoding using only `Part*Data.mat`.",
               "",
               "| metric | value |",
               "| --- | ---: |",
+              f"| benchmark mode | {benchmark_mode} |",
+              f"| analysis label | {analysis_label} |",
               f"| folds | {summary['n_outer_folds']} |",
+              f"| window center | {float(summary['window_center_s']):.3f} s |",
               f"| chance | {float(summary['chance_percent']):.2f}% |",
               f"| mean balanced accuracy | {float(summary['balanced_percent_mean']):.2f}% |",
               f"| balanced accuracy SEM | {float(summary['balanced_percent_sem']):.2f}% |",

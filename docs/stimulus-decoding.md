@@ -32,6 +32,13 @@ held-out participant scores, trial predictions, confusion counts, per-stimulus
 recall, and a group summary with a subject-level one-sided sign-flip test
 against 16-way chance.
 
+The manual GitHub Actions smoke workflow has a `benchmark_mode` input. Use
+`poststimulus` for the standard `0.175` s benchmark and
+`prestimulus-control` for an explicit `-0.175` s control. The workflow writes
+self-describing artifacts such as
+`stimulus_cross_subject_prestimulus_control_outer.csv` and
+`stimulus_cross_subject_prestimulus_control_group_summary.csv`.
+
 Useful follow-up classifiers for this cross-subject benchmark are
 `correlation-prototype`, `multinomial-logistic`, and `shrinkage-lda`.
 `correlation-prototype` classifies each held-out trial by correlation to the
