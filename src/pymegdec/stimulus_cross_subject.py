@@ -10,11 +10,6 @@ from pathlib import Path
 
 import numpy as np
 import scipy.io as sio
-from reptrace.decoding.windowed import fit_window_model as fit_reptrace_window_model
-from reptrace.decoding.windowed import predict_window_model as predict_reptrace_window_model
-from reptrace.metrics.confusion import confusion_counts, per_class_accuracy
-from sklearn.metrics import accuracy_score, balanced_accuracy_score
-
 from pymegdec.alpha_metrics import write_alpha_metrics_csv
 from pymegdec.alpha_signal import get_data_field
 from pymegdec.classifiers import (
@@ -23,6 +18,12 @@ from pymegdec.classifiers import (
     train_multiclass_classifier,
 )
 from pymegdec.data_config import resolve_data_folder
+from reptrace.decoding.windowed import fit_window_model as fit_reptrace_window_model
+from reptrace.decoding.windowed import (
+    predict_window_model as predict_reptrace_window_model,
+)
+from reptrace.metrics.confusion import confusion_counts, per_class_accuracy
+from sklearn.metrics import accuracy_score, balanced_accuracy_score
 
 DEFAULT_CROSS_SUBJECT_PARTICIPANTS = "1-4,6,8,9,10,13-27"
 DEFAULT_CROSS_SUBJECT_WINDOW_CENTER = 0.175
