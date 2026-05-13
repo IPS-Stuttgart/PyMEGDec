@@ -371,9 +371,13 @@ def summarize_nested_cross_subject_stimulus(outer_rows, *, signflip_permutations
     exact_sign_p_value = _one_sided_exact_sign_p_value(differences)
     signflip_p_value = _one_sided_signflip_p_value(differences, n_permutations=signflip_permutations, seed=signflip_seed)
     selected_counts = Counter(int(row["selected_candidate_index"]) for row in outer_rows)
-    classifier_counts = Counter(str(row["classifier"]) for row in outer_rows)
-    window_counts = Counter(float(row["window_center_s"]) for row in outer_rows)
+    classifier_counts = _row_value_counts(outer_rows, "selected_classifier", fallback_key="classifier")
+    window_counts = _row_value_counts(outer_rows, "selected_window_center_s", fallback_key="window_center_s", transform=float)
+    feature_mode_counts = _row_value_counts(outer_rows, "selected_feature_mode", fallback_key="feature_mode")
+    normalization_counts = _row_value_counts(outer_rows, "selected_normalization", fallback_key="normalization")
+    components_pca_counts = _row_value_counts(outer_rows, "selected_components_pca", fallback_key="components_pca")
     trial_cap_counts = Counter(str(row["max_trials_per_class_per_participant"]) for row in outer_rows)
+    winner_margins = _finite_metric_values(outer_rows, "selected_inner_winner_margin")
     return [
         {
             "n_outer_folds": len(outer_rows),
@@ -384,7 +388,13 @@ def summarize_nested_cross_subject_stimulus(outer_rows, *, signflip_permutations
             "selected_candidate_counts": _format_counter(selected_counts),
             "selected_classifier_counts": _format_counter(classifier_counts),
             "selected_window_center_counts": _format_counter(window_counts),
+            "selected_feature_mode_counts": _format_counter(feature_mode_counts),
+            "selected_normalization_counts": _format_counter(normalization_counts),
+            "selected_components_pca_counts": _format_counter(components_pca_counts),
             "max_trials_per_class_per_participant_counts": _format_counter(trial_cap_counts),
+            "inner_winner_margin_mean": _nanmean_or_nan(winner_margins),
+            "inner_winner_margin_median": _nanmedian_or_nan(winner_margins),
+            "inner_winner_margin_min": _nanmin_or_nan(winner_margins),
             "chance_accuracy": chance,
             "chance_percent": 100.0 * chance,
             "accuracy_mean": float(np.mean(raw)),
@@ -1055,14 +1065,26 @@ def _select_nested_candidate(inner_rows):
                 "selected_max_trials_per_class_per_participant": example["max_trials_per_class_per_participant"],
             }
         )
-    return max(
+    ranked = sorted(
         summaries,
         key=lambda row: (
             float(row["selected_inner_balanced_accuracy_mean"]),
             float(row["selected_inner_balanced_accuracy_median"]),
             -int(row["selected_candidate_index"]),
         ),
+        reverse=True,
     )
+    selected = ranked[0]
+    selected_mean = float(selected["selected_inner_balanced_accuracy_mean"])
+    if len(ranked) > 1:
+        second_best_mean = float(ranked[1]["selected_inner_balanced_accuracy_mean"])
+        winner_margin = selected_mean - second_best_mean
+    else:
+        second_best_mean = np.nan
+        winner_margin = np.nan
+    selected["selected_inner_second_best_balanced_accuracy_mean"] = second_best_mean
+    selected["selected_inner_winner_margin"] = winner_margin
+    return selected
 
 
 def _add_selected_candidate_fields(row, selected_row):
@@ -1555,6 +1577,14 @@ def _nanmean_or_nan(values):
     return float(np.mean(values))
 
 
+def _nanmedian_or_nan(values):
+    values = np.asarray(values, dtype=float)
+    values = values[np.isfinite(values)]
+    if values.size == 0:
+        return np.nan
+    return float(np.median(values))
+
+
 def _nanmax_or_nan(values):
     values = np.asarray(values, dtype=float)
     values = values[np.isfinite(values)]
@@ -1623,6 +1653,21 @@ def _percent_sem_or_nan(values):
 
 def _format_counter(counter):
     return ";".join(f"{key}:{counter[key]}" for key in sorted(counter))
+
+
+def _row_value_counts(rows, key, *, fallback_key=None, transform=str):
+    values = []
+    for row in rows:
+        value = row.get(key)
+        if (value is None or value == "") and fallback_key is not None:
+            value = row.get(fallback_key)
+        if value is None or value == "":
+            continue
+        try:
+            values.append(transform(value))
+        except (TypeError, ValueError):
+            continue
+    return Counter(values)
 
 
 def _participants_total(differences):

@@ -86,6 +86,11 @@ while making candidate selection fast enough to iterate. Omit
 The nested outputs include untouched outer-fold scores, one row per inner
 validation fold and candidate, selected hyperparameters per outer fold, trial
 predictions, confusion counts, per-stimulus accuracy, and a group summary.
+The group summary reports selected-candidate counts for classifier, window
+center, feature mode, normalization, and PCA components. It also reports the
+inner winner margin, defined per outer fold as the best inner balanced accuracy
+minus the second-best inner balanced accuracy, to make noisy hyperparameter
+selection visible.
 
 ## Time-resolved decoding curve
 
