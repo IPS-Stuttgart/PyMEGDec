@@ -312,6 +312,7 @@ class TestStimulusCrossSubject(unittest.TestCase):
         self.assertEqual(artifacts["group_summary"][0]["selected_window_center_counts"], "0.2:4")
         self.assertEqual(artifacts["group_summary"][0]["selected_feature_mode_counts"], "sensor_mean:4")
         self.assertEqual(artifacts["group_summary"][0]["selected_normalization_counts"], "none:4")
+        self.assertEqual(artifacts["group_summary"][0]["selected_alignment_counts"], "none:4")
         self.assertEqual(artifacts["group_summary"][0]["selected_components_pca_counts"], "inf:4")
         self.assertGreater(artifacts["group_summary"][0]["inner_winner_margin_mean"], 0.0)
         self.assertGreater(artifacts["group_summary"][0]["inner_winner_margin_median"], 0.0)
@@ -354,6 +355,35 @@ class TestStimulusCrossSubject(unittest.TestCase):
         self.assertEqual({row["test_participant"] for row in artifacts["selected"]}, {2, 4})
         self.assertEqual(len(artifacts["predictions"]), 8)
         self.assertEqual(artifacts["group_summary"][0]["n_outer_folds"], 2)
+
+    def test_nested_cross_subject_can_try_train_class_procrustes_alignment(self):
+        data_by_participant = {
+            1: _mat_data([1, 2, 1, 2], [-1.2, 1.2, -1.1, 1.1]),
+            2: _mat_data([1, 2, 1, 2], [-1.0, 1.0, -0.9, 0.9]),
+            3: _mat_data([1, 2, 1, 2], [-1.3, 1.3, -1.2, 1.2]),
+            4: _mat_data([1, 2, 1, 2], [-1.1, 1.1, -1.0, 1.0]),
+        }
+        candidate_configs = make_cross_subject_candidate_configs(
+            window_centers=(0.175,),
+            window_size=0.1,
+            feature_modes=("sensor_flat",),
+            normalizations=("subject_trial_z",),
+            alignments=("none", "train_class_procrustes"),
+            classifiers=("multiclass-svm",),
+            classifier_params=(0.5,),
+            components_pca_values=(float("inf"),),
+            chance_classes=2,
+            signflip_permutations=128,
+        )
+
+        with patch("pymegdec.stimulus_cross_subject.sio.loadmat", side_effect=_loadmat_side_effect(data_by_participant)):
+            artifacts = evaluate_nested_cross_subject_stimulus("unused", [1, 2, 3, 4], candidate_configs=candidate_configs)
+
+        selected_alignments = {row["selected_alignment"] for row in artifacts["selected"]}
+        self.assertTrue(selected_alignments <= {"none", "train_class_procrustes"})
+        self.assertEqual({row["alignment"] for row in artifacts["inner_validation"]}, {"none", "train_class_procrustes"})
+        self.assertIn("selected_alignment_counts", artifacts["group_summary"][0])
+        self.assertTrue(all("alignment_common_classes" in row for row in artifacts["outer"]))
 
     def test_nested_cross_subject_label_shuffle_control_marks_outputs(self):
         data_by_participant = {
