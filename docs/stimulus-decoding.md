@@ -72,6 +72,7 @@ pymegdec stimulus cross-subject-nested \
   --window-size 0.1 \
   --feature-modes sensor_flat \
   --normalizations subject_baseline_z,subject_trial_z,subject_baseline_whiten \
+  --alignments none,train_class_procrustes \
   --classifiers multinomial-logistic,shrinkage-lda,multiclass-svm \
   --classifier-params default \
   --components-pca-values 64 \
@@ -87,10 +88,18 @@ The nested outputs include untouched outer-fold scores, one row per inner
 validation fold and candidate, selected hyperparameters per outer fold, trial
 predictions, confusion counts, per-stimulus accuracy, and a group summary.
 The group summary reports selected-candidate counts for classifier, window
-center, feature mode, normalization, and PCA components. It also reports the
-inner winner margin, defined per outer fold as the best inner balanced accuracy
-minus the second-best inner balanced accuracy, to make noisy hyperparameter
-selection visible.
+center, feature mode, normalization, alignment, and PCA components. It also
+reports the inner winner margin, defined per outer fold as the best inner
+balanced accuracy minus the second-best inner balanced accuracy, to make noisy
+hyperparameter selection visible.
+
+The `train_class_procrustes` alignment mode fits an orthogonal channel-space
+Procrustes transform from the outer-training participants only. It uses
+training-participant class-average topographies to align the training pool to a
+shared template, then evaluates the held-out participant without using that
+participant's labels for alignment. This is a conservative first alignment
+control; supervised held-out-subject alignment would require a separate labeled
+calibration design.
 
 Add `--label-shuffle-control` to run a nested null control with the same
 participant splits and candidate grid, but with stimulus labels shuffled within

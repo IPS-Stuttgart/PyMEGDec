@@ -33,18 +33,21 @@ DEFAULT_CROSS_SUBJECT_BASELINE_WINDOW = (-0.5, 0.0)
 DEFAULT_CROSS_SUBJECT_CHANCE_CLASSES = 16
 DEFAULT_CROSS_SUBJECT_FEATURE_MODE = "sensor_mean"
 DEFAULT_CROSS_SUBJECT_NORMALIZATION = "subject_baseline_z"
+DEFAULT_CROSS_SUBJECT_ALIGNMENT = "none"
 DEFAULT_CROSS_SUBJECT_CLASSIFIER = "multiclass-svm"
 DEFAULT_CROSS_SUBJECT_COMPONENTS_PCA = 64
 DEFAULT_CROSS_SUBJECT_NESTED_WINDOW_CENTERS = (0.150, 0.175, 0.200)
 DEFAULT_CROSS_SUBJECT_SELECTION_METRIC = "balanced_accuracy"
 FEATURE_MODES = ("sensor_mean", "sensor_flat")
 NORMALIZATION_MODES = ("none", "subject_z", "subject_trial_z", "subject_baseline_z", "subject_baseline_whiten")
+ALIGNMENT_MODES = ("none", "train_class_procrustes")
 BASELINE_WHITENING_SHRINKAGE = 0.1
 BASELINE_WHITENING_EIGENVALUE_FLOOR = 1e-6
 CROSS_SUBJECT_PREDICTION_GROUP_COLUMNS = (
     "window_center_s",
     "feature_mode",
     "normalization",
+    "alignment",
     "classifier",
     "components_pca",
     "max_trials_per_class_per_participant",
@@ -63,6 +66,7 @@ class CrossSubjectStimulusConfig:  # pylint: disable=too-many-instance-attribute
     baseline_window: tuple[float, float] = DEFAULT_CROSS_SUBJECT_BASELINE_WINDOW
     feature_mode: str = DEFAULT_CROSS_SUBJECT_FEATURE_MODE
     normalization: str = DEFAULT_CROSS_SUBJECT_NORMALIZATION
+    alignment: str = DEFAULT_CROSS_SUBJECT_ALIGNMENT
     classifier: str = DEFAULT_CROSS_SUBJECT_CLASSIFIER
     classifier_param: object = float("nan")
     components_pca: int | float = DEFAULT_CROSS_SUBJECT_COMPONENTS_PCA
@@ -205,6 +209,7 @@ def make_cross_subject_candidate_configs(  # pylint: disable=too-many-arguments
     baseline_window=DEFAULT_CROSS_SUBJECT_BASELINE_WINDOW,
     feature_modes=(DEFAULT_CROSS_SUBJECT_FEATURE_MODE,),
     normalizations=(DEFAULT_CROSS_SUBJECT_NORMALIZATION,),
+    alignments=(DEFAULT_CROSS_SUBJECT_ALIGNMENT,),
     classifiers=(DEFAULT_CROSS_SUBJECT_CLASSIFIER,),
     classifier_params=(float("nan"),),
     components_pca_values=(DEFAULT_CROSS_SUBJECT_COMPONENTS_PCA,),
@@ -223,6 +228,7 @@ def make_cross_subject_candidate_configs(  # pylint: disable=too-many-arguments
             baseline_window=baseline_window,
             feature_mode=feature_mode,
             normalization=normalization,
+            alignment=alignment,
             classifier=classifier,
             classifier_param=classifier_param,
             components_pca=components_pca,
@@ -232,10 +238,11 @@ def make_cross_subject_candidate_configs(  # pylint: disable=too-many-arguments
             signflip_permutations=signflip_permutations,
             signflip_seed=signflip_seed,
         )
-        for window_center, feature_mode, normalization, classifier, classifier_param, components_pca in product(
+        for window_center, feature_mode, normalization, alignment, classifier, classifier_param, components_pca in product(
             window_centers,
             feature_modes,
             normalizations,
+            alignments,
             classifiers,
             classifier_params,
             components_pca_values,
@@ -320,6 +327,7 @@ def summarize_cross_subject_stimulus_smoke(outer_rows, *, config=None):
             "baseline_window_stop_s": config.baseline_window[1],
             "feature_mode": config.feature_mode,
             "normalization": config.normalization,
+            "alignment": config.alignment,
             "classifier": config.classifier,
             "components_pca": config.components_pca,
             "max_trials_per_class_per_participant": config.max_trials_per_class_per_participant,
@@ -381,6 +389,7 @@ def summarize_nested_cross_subject_stimulus(outer_rows, *, signflip_permutations
     window_counts = _row_value_counts(outer_rows, "selected_window_center_s", fallback_key="window_center_s", transform=float)
     feature_mode_counts = _row_value_counts(outer_rows, "selected_feature_mode", fallback_key="feature_mode")
     normalization_counts = _row_value_counts(outer_rows, "selected_normalization", fallback_key="normalization")
+    alignment_counts = _row_value_counts(outer_rows, "selected_alignment", fallback_key="alignment")
     components_pca_counts = _row_value_counts(outer_rows, "selected_components_pca", fallback_key="components_pca")
     trial_cap_counts = Counter(str(row["max_trials_per_class_per_participant"]) for row in outer_rows)
     winner_margins = _finite_metric_values(outer_rows, "selected_inner_winner_margin")
@@ -400,6 +409,7 @@ def summarize_nested_cross_subject_stimulus(outer_rows, *, signflip_permutations
             "selected_window_center_counts": _format_counter(window_counts),
             "selected_feature_mode_counts": _format_counter(feature_mode_counts),
             "selected_normalization_counts": _format_counter(normalization_counts),
+            "selected_alignment_counts": _format_counter(alignment_counts),
             "selected_components_pca_counts": _format_counter(components_pca_counts),
             "max_trials_per_class_per_participant_counts": _format_counter(trial_cap_counts),
             "inner_winner_margin_mean": _nanmean_or_nan(winner_margins),
@@ -902,7 +912,7 @@ def export_nested_cross_subject_stimulus(  # pylint: disable=too-many-arguments
 
 
 def _load_feature_cache(data_folder, participants, candidate_configs, *, progress=None):
-    representative_configs: dict[tuple[float, float, float, float, str, str], CrossSubjectStimulusConfig] = {}
+    representative_configs: dict[tuple[float, float, float, float, str, str, int | None], CrossSubjectStimulusConfig] = {}
     for candidate_config in candidate_configs:
         representative_configs.setdefault(_feature_cache_key(candidate_config), candidate_config)
 
@@ -913,7 +923,8 @@ def _load_feature_cache(data_folder, participants, candidate_configs, *, progres
                 "LOAD feature_set "
                 f"window_center={candidate_config.window_center} "
                 f"feature_mode={candidate_config.feature_mode} "
-                f"normalization={candidate_config.normalization}"
+                f"normalization={candidate_config.normalization} "
+                f"alignment={candidate_config.alignment}"
             )
         feature_cache[key] = {participant: load_participant_stimulus_features(data_folder, participant, config=candidate_config) for participant in participants}
     return feature_cache
@@ -1061,6 +1072,107 @@ def _training_labels(feature_set, *, label_shuffle_seed=None, label_shuffle_cont
     return rng.permutation(labels)
 
 
+def _align_training_features_by_subject(feature_sets, features_by_subject, labels_by_subject, config):
+    if config.alignment == "none":
+        return features_by_subject, _alignment_metadata(config.alignment, common_classes=(), aligned_participants=())
+    if config.alignment != "train_class_procrustes":
+        raise ValueError(f"Unsupported alignment: {config.alignment}")
+
+    common_classes = _common_label_values(labels_by_subject)
+    if len(common_classes) < 2:
+        return features_by_subject, _alignment_metadata(config.alignment, common_classes=common_classes, aligned_participants=())
+
+    class_patterns = [
+        _participant_class_channel_patterns(features, labels, feature_set, common_classes)
+        for feature_set, features, labels in zip(feature_sets, features_by_subject, labels_by_subject)
+    ]
+    transforms = _fit_channel_procrustes_transforms(class_patterns)
+    aligned_features = [
+        _apply_channel_procrustes_transform(features, feature_set, transform)
+        for feature_set, features, transform in zip(feature_sets, features_by_subject, transforms)
+    ]
+    return aligned_features, _alignment_metadata(
+        config.alignment,
+        common_classes=common_classes,
+        aligned_participants=(feature_set.participant for feature_set in feature_sets),
+    )
+
+
+def _alignment_metadata(alignment, *, common_classes, aligned_participants):
+    return {
+        "alignment": alignment,
+        "common_classes": ",".join(str(int(label)) for label in common_classes),
+        "aligned_participants": ",".join(str(int(participant)) for participant in aligned_participants),
+    }
+
+
+def _common_label_values(labels_by_subject):
+    label_sets = [set(np.asarray(labels, dtype=int).tolist()) for labels in labels_by_subject]
+    if not label_sets:
+        return tuple()
+    return tuple(sorted(set.intersection(*label_sets)))
+
+
+def _participant_class_channel_patterns(features, labels, feature_set, common_classes):
+    channel_features = _features_as_trial_channel_matrix(features, feature_set)
+    labels = np.asarray(labels, dtype=int)
+    patterns = []
+    for label in common_classes:
+        class_features = channel_features[labels == int(label)]
+        if class_features.size == 0:
+            raise ValueError(f"Missing class {label} while fitting Procrustes alignment.")
+        patterns.append(np.mean(class_features, axis=(0, 1)))
+    return np.vstack(patterns)
+
+
+def _features_as_trial_channel_matrix(features, feature_set):
+    features = np.asarray(features, dtype=float)
+    if features.shape[1] == int(feature_set.n_channels):
+        return features[:, None, :]
+    expected_width = int(feature_set.n_window_samples) * int(feature_set.n_channels)
+    if features.shape[1] != expected_width:
+        raise ValueError("Feature width is incompatible with n_window_samples and n_channels.")
+    return features.reshape(features.shape[0], int(feature_set.n_window_samples), int(feature_set.n_channels))
+
+
+def _fit_channel_procrustes_transforms(class_patterns):
+    template = np.mean(np.stack(class_patterns, axis=0), axis=0)
+    for _ in range(3):
+        transforms = [_channel_procrustes_transform(patterns, template) for patterns in class_patterns]
+        aligned_patterns = [_apply_channel_pattern_transform(patterns, transform) for patterns, transform in zip(class_patterns, transforms)]
+        template = np.mean(np.stack(aligned_patterns, axis=0), axis=0)
+    return [_channel_procrustes_transform(patterns, template) for patterns in class_patterns]
+
+
+def _channel_procrustes_transform(source, target):
+    source = np.asarray(source, dtype=float)
+    target = np.asarray(target, dtype=float)
+    source_center = np.mean(source, axis=0)
+    target_center = np.mean(target, axis=0)
+    source_centered = source - source_center
+    target_centered = target - target_center
+    cross_covariance = source_centered.T @ target_centered
+    left, _singular_values, right_t = np.linalg.svd(cross_covariance, full_matrices=False)
+    rotation = left @ right_t
+    return {
+        "source_center": source_center,
+        "target_center": target_center,
+        "rotation": rotation,
+    }
+
+
+def _apply_channel_pattern_transform(patterns, transform):
+    return (np.asarray(patterns, dtype=float) - transform["source_center"]) @ transform["rotation"] + transform["target_center"]
+
+
+def _apply_channel_procrustes_transform(features, feature_set, transform):
+    channel_features = _features_as_trial_channel_matrix(features, feature_set)
+    aligned = (channel_features - transform["source_center"]) @ transform["rotation"] + transform["target_center"]
+    if feature_set.n_window_samples == 1:
+        return aligned[:, 0, :]
+    return aligned.reshape(features.shape[0], -1)
+
+
 def _feature_cache_key(config):
     return (
         float(config.window_center),
@@ -1129,6 +1241,7 @@ def _select_nested_candidate(inner_rows):
                 "selected_window_stop_s": example["window_stop_s"],
                 "selected_feature_mode": example["feature_mode"],
                 "selected_normalization": example["normalization"],
+                "selected_alignment": example["alignment"],
                 "selected_classifier": example["classifier"],
                 "selected_classifier_param": example["classifier_param"],
                 "selected_components_pca": example["components_pca"],
@@ -1185,7 +1298,7 @@ def _evaluate_outer_fold(
 
 
 def _fit_outer_fold_model(train_sets, config, classifier_param, *, label_shuffle_seed=None, label_shuffle_context=()):
-    train_features = np.vstack([_normalized_subject_features(feature_set, config) for feature_set in train_sets])
+    train_features_by_subject = [_normalized_subject_features(feature_set, config) for feature_set in train_sets]
     train_label_arrays = [
         _training_labels(
             feature_set,
@@ -1194,6 +1307,13 @@ def _fit_outer_fold_model(train_sets, config, classifier_param, *, label_shuffle
         )
         for feature_set in train_sets
     ]
+    train_features_by_subject, alignment_metadata = _align_training_features_by_subject(
+        train_sets,
+        train_features_by_subject,
+        train_label_arrays,
+        config,
+    )
+    train_features = np.vstack(train_features_by_subject)
     train_labels_one_based = np.concatenate(train_label_arrays)
     train_labels = train_labels_one_based - 1
 
@@ -1221,6 +1341,7 @@ def _fit_outer_fold_model(train_sets, config, classifier_param, *, label_shuffle
         "train_window": train_window,
         "label_shuffle_control": label_shuffle_seed is not None,
         "label_shuffle_seed": "" if label_shuffle_seed is None else int(label_shuffle_seed),
+        "alignment_metadata": alignment_metadata,
     }
 
 
@@ -1240,6 +1361,7 @@ def _score_outer_fold_model(fitted_model, test_set, config, *, include_predictio
     train_participants = fitted_model["train_participants"]
     train_labels = fitted_model["train_labels"]
     train_window = fitted_model["train_window"]
+    alignment_metadata = fitted_model["alignment_metadata"]
 
     outer_row = {
         "outer_fold": int(test_set.participant),
@@ -1255,6 +1377,7 @@ def _score_outer_fold_model(fitted_model, test_set, config, *, include_predictio
         "baseline_window_stop_s": config.baseline_window[1],
         "feature_mode": config.feature_mode,
         "normalization": config.normalization,
+        "alignment": config.alignment,
         "accuracy": accuracy,
         "percent": 100.0 * accuracy,
         "balanced_accuracy": balanced_accuracy,
@@ -1290,6 +1413,8 @@ def _score_outer_fold_model(fitted_model, test_set, config, *, include_predictio
         "n_baseline_samples": test_set.n_baseline_samples,
         "label_shuffle_control": bool(fitted_model["label_shuffle_control"]),
         "label_shuffle_seed": fitted_model["label_shuffle_seed"],
+        "alignment_common_classes": alignment_metadata["common_classes"],
+        "alignment_aligned_participants": alignment_metadata["aligned_participants"],
     }
     prediction_rows = []
     if include_predictions:
@@ -1319,6 +1444,7 @@ def _prediction_rows(test_set, test_labels, predictions, true_label_ranks, *, co
                 "window_stop_s": train_window[1],
                 "feature_mode": config.feature_mode,
                 "normalization": config.normalization,
+                "alignment": config.alignment,
                 "classifier": config.classifier,
                 "components_pca": config.components_pca,
                 "max_trials_per_class_per_participant": config.max_trials_per_class_per_participant,
@@ -1831,6 +1957,7 @@ def _normalized_config(config):
         baseline_window=config.baseline_window,
         feature_mode=_normalize_feature_mode(config.feature_mode),
         normalization=_normalize_normalization(config.normalization),
+        alignment=_normalize_alignment(config.alignment),
         classifier=config.classifier,
         classifier_param=config.classifier_param,
         components_pca=config.components_pca,
@@ -1872,4 +1999,11 @@ def _normalize_normalization(value):
     normalized = str(value).strip().lower().replace("-", "_")
     if normalized not in NORMALIZATION_MODES:
         raise ValueError(f"normalization must be one of {NORMALIZATION_MODES}.")
+    return normalized
+
+
+def _normalize_alignment(value):
+    normalized = str(value).strip().lower().replace("-", "_")
+    if normalized not in ALIGNMENT_MODES:
+        raise ValueError(f"alignment must be one of {ALIGNMENT_MODES}.")
     return normalized

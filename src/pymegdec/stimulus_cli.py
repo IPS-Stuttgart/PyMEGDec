@@ -25,6 +25,8 @@ from pymegdec.reaction_time_analysis import (
     parse_participant_spec,
 )
 from pymegdec.stimulus_cross_subject import (
+    ALIGNMENT_MODES,
+    DEFAULT_CROSS_SUBJECT_ALIGNMENT,
     DEFAULT_CROSS_SUBJECT_BASELINE_WINDOW,
     DEFAULT_CROSS_SUBJECT_CHANCE_CLASSES,
     DEFAULT_CROSS_SUBJECT_CLASSIFIER,
@@ -99,6 +101,10 @@ def _feature_mode_token(value: str) -> str:
     return value.strip().lower().replace("-", "_")
 
 
+def _alignment_token(value: str) -> str:
+    return value.strip().lower().replace("-", "_")
+
+
 def _parse_token_list(value: str) -> tuple[str, ...]:
     values = tuple(token.strip() for token in value.split(",") if token.strip())
     if not values:
@@ -112,6 +118,10 @@ def _parse_feature_mode_list(value: str) -> tuple[str, ...]:
 
 def _parse_normalization_list(value: str) -> tuple[str, ...]:
     return tuple(_normalization_token(token) for token in _parse_token_list(value))
+
+
+def _parse_alignment_list(value: str) -> tuple[str, ...]:
+    return tuple(_alignment_token(token) for token in _parse_token_list(value))
 
 
 def _parse_int_or_inf_list(value: str) -> tuple[int | float, ...]:
@@ -244,6 +254,13 @@ def _build_cross_subject_smoke_parser(prog: str | None = None) -> argparse.Argum
         choices=NORMALIZATION_MODES,
         help="Subject-level normalization mode.",
     )
+    parser.add_argument(
+        "--alignment",
+        type=_alignment_token,
+        default=DEFAULT_CROSS_SUBJECT_ALIGNMENT,
+        choices=ALIGNMENT_MODES,
+        help="Cross-subject training alignment mode.",
+    )
     parser.add_argument("--classifier", default=DEFAULT_CROSS_SUBJECT_CLASSIFIER, help="Classifier name.")
     parser.add_argument("--classifier-param", default=None, help="Classifier parameter value, JSON, Python literal, numeric value, or nan.")
     parser.add_argument("--components-pca", type=parse_int_or_inf, default=DEFAULT_CROSS_SUBJECT_COMPONENTS_PCA, help="Number of PCA components, or inf.")
@@ -279,6 +296,7 @@ def stimulus_cross_subject_smoke(argv: Sequence[str] | None = None, prog: str | 
         baseline_window=args.baseline_window,
         feature_mode=args.feature_mode,
         normalization=args.normalization,
+        alignment=args.alignment,
         classifier=args.classifier,
         classifier_param=parse_classifier_param(args.classifier_param),
         components_pca=args.components_pca,
@@ -342,6 +360,12 @@ def _build_cross_subject_nested_parser(prog: str | None = None) -> argparse.Argu
         help="Comma-separated subject normalization modes.",
     )
     parser.add_argument(
+        "--alignments",
+        type=_parse_alignment_list,
+        default=(DEFAULT_CROSS_SUBJECT_ALIGNMENT,),
+        help="Comma-separated cross-subject training alignment modes.",
+    )
+    parser.add_argument(
         "--classifiers",
         type=_parse_token_list,
         default=(DEFAULT_CROSS_SUBJECT_CLASSIFIER,),
@@ -402,6 +426,7 @@ def stimulus_cross_subject_nested(argv: Sequence[str] | None = None, prog: str |
         baseline_window=args.baseline_window,
         feature_modes=args.feature_modes,
         normalizations=args.normalizations,
+        alignments=args.alignments,
         classifiers=args.classifiers,
         classifier_params=args.classifier_params,
         components_pca_values=args.components_pca_values,

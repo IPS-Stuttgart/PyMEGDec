@@ -64,6 +64,11 @@ on:
         required: true
         default: subject_baseline_z,subject_trial_z,subject_baseline_whiten
         type: string
+      alignments:
+        description: Candidate training alignment modes.
+        required: true
+        default: none
+        type: string
       classifiers:
         description: Candidate classifier names.
         required: true
@@ -114,6 +119,7 @@ jobs:
       BASELINE_WINDOW: ${{ inputs.baseline_window }}
       FEATURE_MODES: ${{ inputs.feature_modes }}
       NORMALIZATIONS: ${{ inputs.normalizations }}
+      ALIGNMENTS: ${{ inputs.alignments }}
       CLASSIFIERS: ${{ inputs.classifiers }}
       CLASSIFIER_PARAMS: ${{ inputs.classifier_params }}
       COMPONENTS_PCA_VALUES: ${{ inputs.components_pca_values }}
@@ -184,6 +190,7 @@ jobs:
             --baseline-window "${BASELINE_WINDOW}"
             --feature-modes "${FEATURE_MODES}"
             --normalizations "${NORMALIZATIONS}"
+            --alignments "${ALIGNMENTS}"
             --classifiers "${CLASSIFIERS}"
             --classifier-params "${CLASSIFIER_PARAMS}"
             --components-pca-values "${COMPONENTS_PCA_VALUES}"
@@ -271,6 +278,7 @@ jobs:
               f"| selected window center counts | {summary.get('selected_window_center_counts', '')} |",
               f"| selected feature mode counts | {summary.get('selected_feature_mode_counts', '')} |",
               f"| selected normalization counts | {summary.get('selected_normalization_counts', '')} |",
+              f"| selected alignment counts | {summary.get('selected_alignment_counts', '')} |",
               f"| selected PCA component counts | {summary.get('selected_components_pca_counts', '')} |",
               f"| inner winner margin mean | {percent_summary('inner_winner_margin_mean')} |",
               f"| inner winner margin median | {percent_summary('inner_winner_margin_median')} |",
@@ -286,13 +294,13 @@ jobs:
               "",
               "## Selected candidates",
               "",
-              "| participant | candidate | classifier | window center | inner balanced accuracy | winner margin |",
-              "| ---: | ---: | --- | ---: | ---: | ---: |",
+              "| participant | candidate | classifier | alignment | window center | inner balanced accuracy | winner margin |",
+              "| ---: | ---: | --- | --- | ---: | ---: | ---: |",
           ]
           for row in selected_rows:
               lines.append(
                   f"| {row['test_participant']} | {row['selected_candidate_index']} | {row['selected_classifier']} | "
-                  f"{float(row['selected_window_center_s']):.3f} | "
+                  f"{row.get('selected_alignment', 'none')} | {float(row['selected_window_center_s']):.3f} | "
                   f"{100.0 * float(row['selected_inner_balanced_accuracy_mean']):.2f}% | "
                   f"{percent_row(row, 'selected_inner_winner_margin')} |"
               )
