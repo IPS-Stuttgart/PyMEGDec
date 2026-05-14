@@ -52,6 +52,7 @@ pymegdec-cross-validate = "pymegdec.cli:cross_validate"
 pymegdec-transfer = "pymegdec.cli:transfer"
 pymegdec-stimulus-decoding = "pymegdec.cli:stimulus_decoding"
 pymegdec-stimulus-cross-subject-mcca = "pymegdec.stimulus_mcca:stimulus_cross_subject_mcca"
+pymegdec-stimulus-cross-subject-hyperalignment = "pymegdec.stimulus_hyperalignment:stimulus_cross_subject_hyperalignment"
 pymegdec-alpha-movement-results = "pymegdec.cli:alpha_movement_results"
 pymegdec-make-synthetic-data = "pymegdec.synthetic_data_cli:main"
 

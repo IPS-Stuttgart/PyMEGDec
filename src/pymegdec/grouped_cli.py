@@ -10,6 +10,7 @@ from pymegdec import alpha_cli
 from pymegdec import cli as legacy_cli
 from pymegdec import stimulus_cli
 from pymegdec import stimulus_mcca
+from pymegdec import stimulus_hyperalignment
 from pymegdec.data_download import download_meg_data_files
 from pymegdec.synthetic_data_cli import make_synthetic_data
 
@@ -34,6 +35,7 @@ def _stimulus_handlers() -> dict[str, CommandHandler]:
     return {
         "cross-subject-nested": stimulus_cli.stimulus_cross_subject_nested,
         "cross-subject-mcca": stimulus_mcca.stimulus_cross_subject_mcca,
+        "cross-subject-hyperalignment": stimulus_hyperalignment.stimulus_cross_subject_hyperalignment,
         "cross-subject-smoke": stimulus_cli.stimulus_cross_subject_smoke,
         "decoding": legacy_cli.stimulus_decoding,
         "predictions": stimulus_cli.stimulus_predictions,
@@ -66,6 +68,7 @@ def _top_level_handlers() -> dict[str, CommandHandler]:
         "stimulus-decoding": legacy_cli.stimulus_decoding,
         "stimulus-cross-subject-nested": stimulus_cli.stimulus_cross_subject_nested,
         "stimulus-cross-subject-mcca": stimulus_mcca.stimulus_cross_subject_mcca,
+        "stimulus-cross-subject-hyperalignment": stimulus_hyperalignment.stimulus_cross_subject_hyperalignment,
         "stimulus-cross-subject-smoke": stimulus_cli.stimulus_cross_subject_smoke,
         "stimulus-predictions": stimulus_cli.stimulus_predictions,
         "stimulus-robustness": stimulus_cli.stimulus_robustness,
@@ -86,7 +89,7 @@ def _print_main_help() -> None:
     parser.print_help()
     print(
         "\nCommand groups:\n"
-        "  pymegdec stimulus <cross-subject-nested|cross-subject-mcca|cross-subject-smoke|decoding|predictions|robustness|temporal-generalization|onset-scan>\n"
+        "  pymegdec stimulus <cross-subject-nested|cross-subject-mcca|cross-subject-hyperalignment|cross-subject-smoke|decoding|predictions|robustness|temporal-generalization|onset-scan>\n"
         "  pymegdec alpha <metrics|movement|movement-results|reaction-time|rt>\n"
         "  pymegdec data <download>\n"
         "\nCore commands:\n"
