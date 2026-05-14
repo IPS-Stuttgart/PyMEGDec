@@ -247,7 +247,7 @@ def _score_matrix(bundle, features):
 
 
 def _rank_metrics(scores, classes, y_true):
-    empty = [{} for _ in y_true]
+    empty: list[dict[str, object]] = [{} for _ in y_true]
     if scores is None or classes is None:
         return np.nan, np.nan, np.nan, empty
     order = np.argsort(scores, axis=1)[:, ::-1]

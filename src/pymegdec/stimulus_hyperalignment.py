@@ -583,10 +583,13 @@ def _normalized_hyperalignment_config(config):
         raise ValueError("target_calibration_trials_per_class must be non-negative.")
     if config.hyperalignment_iterations < 0:
         raise ValueError("hyperalignment_iterations must be non-negative.")
+    baseline_window = tuple(float(value) for value in config.baseline_window)
+    if len(baseline_window) != 2:
+        raise ValueError("baseline_window must contain exactly two values.")
     return CrossSubjectHyperalignmentConfig(
         window_center=float(config.window_center),
         window_size=float(config.window_size),
-        baseline_window=tuple(float(value) for value in config.baseline_window),
+        baseline_window=(baseline_window[0], baseline_window[1]),
         feature_mode=feature_mode,
         normalization=normalization,
         classifier=str(config.classifier),
@@ -665,12 +668,12 @@ def _one_sided_signflip_p_value(differences, *, n_permutations, seed):
         return np.nan
     observed = float(np.mean(differences))
     rng = np.random.default_rng(seed)
-    null_values = []
+    null_values: list[float] = []
     for _ in range(int(n_permutations)):
         signs = rng.choice(np.array([-1.0, 1.0]), size=differences.size)
         null_values.append(float(np.mean(differences * signs)))
-    null_values = np.asarray(null_values, dtype=float)
-    return float((np.sum(null_values >= observed) + 1.0) / (null_values.size + 1.0))
+    null_array = np.asarray(null_values, dtype=float)
+    return float((np.sum(null_array >= observed) + 1.0) / (null_array.size + 1.0))
 
 
 def _parse_time_window(value: str) -> tuple[float, float]:

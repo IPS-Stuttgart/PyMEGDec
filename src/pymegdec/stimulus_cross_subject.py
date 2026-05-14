@@ -1782,12 +1782,12 @@ def _one_sided_signflip_p_value(differences, *, n_permutations, seed):
     if observed <= 0:
         return 1.0
     if differences.size <= 16:
-        signs = np.array(np.meshgrid(*[[-1.0, 1.0]] * differences.size)).T.reshape(-1, differences.size)
-        null_means = signs @ differences / differences.size
+        exact_signs = np.array(np.meshgrid(*[[-1.0, 1.0]] * differences.size)).T.reshape(-1, differences.size)
+        null_means = exact_signs @ differences / differences.size
         return float(np.mean(null_means >= observed))
     rng = np.random.default_rng(seed)
-    signs = rng.choice(np.array([-1.0, 1.0]), size=(int(n_permutations), differences.size))
-    null_means = signs @ differences / differences.size
+    random_signs = rng.choice(np.array([-1.0, 1.0]), size=(int(n_permutations), differences.size))
+    null_means = random_signs @ differences / differences.size
     return float((np.sum(null_means >= observed) + 1) / (int(n_permutations) + 1))
 
 
