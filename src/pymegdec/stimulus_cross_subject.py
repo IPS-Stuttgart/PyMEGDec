@@ -44,6 +44,7 @@ DEFAULT_CROSS_SUBJECT_CLASSIFIER = "multiclass-svm"
 DEFAULT_CROSS_SUBJECT_COMPONENTS_PCA = 64
 DEFAULT_CROSS_SUBJECT_NESTED_WINDOW_CENTERS = (0.150, 0.175, 0.200)
 DEFAULT_CROSS_SUBJECT_SELECTION_METRIC = "balanced_accuracy"
+INNER_VALIDATION_SCHEMES = ("loso", "random-holdout")
 FEATURE_MODES = ("sensor_mean", "sensor_flat")
 NORMALIZATION_MODES = ("none", "subject_z", "subject_trial_z", "subject_baseline_z", "subject_baseline_whiten")
 ALIGNMENT_MODES = ("none", "train_class_procrustes")
@@ -154,17 +155,20 @@ def evaluate_nested_cross_subject_stimulus(
     *,
     candidate_configs,
     outer_participants=None,
+    inner_validation_scheme="loso",
+    inner_validation_seed=0,
     progress=None,
     existing_artifacts=None,
     after_outer_fold=None,
     label_shuffle_control=False,
     label_shuffle_seed=0,
 ):
-    """Run nested LOSO model selection and evaluate each untouched outer participant once."""
+    """Run nested model selection and evaluate each untouched outer participant once."""
 
     candidate_configs = _normalized_candidate_configs(candidate_configs)
     data_folder = resolve_data_folder(data_folder)
     participants = tuple(int(participant) for participant in participants)
+    inner_validation_scheme = _normalize_inner_validation_scheme(inner_validation_scheme)
     if len(participants) < 3:
         raise ValueError("At least three participants are required for nested cross-subject decoding.")
     if not candidate_configs:
@@ -191,6 +195,8 @@ def evaluate_nested_cross_subject_stimulus(
             candidate_configs,
             feature_cache,
             inner_pair_cache,
+            inner_validation_scheme=inner_validation_scheme,
+            inner_validation_seed=inner_validation_seed,
             progress=progress,
             label_shuffle_control=label_shuffle_control,
             label_shuffle_seed=label_shuffle_seed,
@@ -406,11 +412,16 @@ def summarize_nested_cross_subject_stimulus(outer_rows, *, signflip_permutations
     winner_margins = _finite_metric_values(outer_rows, "selected_inner_winner_margin")
     label_shuffle_control = _single_row_value(outer_rows, "label_shuffle_control", default=False)
     label_shuffle_seed = _single_row_value(outer_rows, "label_shuffle_seed", default="")
+    selection_mode = _single_row_value(outer_rows, "selection_mode", default="nested_loso")
+    inner_validation_scheme = _single_row_value(outer_rows, "inner_validation_scheme", default="loso")
+    inner_validation_seed = _single_row_value(outer_rows, "inner_validation_seed", default="")
     return [
         {
             "n_outer_folds": len(outer_rows),
             "n_test_participants": len(outer_rows),
-            "selection_mode": "nested_loso",
+            "selection_mode": selection_mode,
+            "inner_validation_scheme": inner_validation_scheme,
+            "inner_validation_seed": inner_validation_seed,
             "selection_metric": DEFAULT_CROSS_SUBJECT_SELECTION_METRIC,
             "label_shuffle_control": label_shuffle_control,
             "label_shuffle_seed": label_shuffle_seed,
@@ -653,6 +664,38 @@ def _normalize_outer_participants(participants, outer_participants):
     return outer_participants
 
 
+def _normalize_inner_validation_scheme(scheme):
+    scheme = str(scheme or "loso").strip().lower().replace("_", "-")
+    aliases = {
+        "leave-one-subject-out": "loso",
+        "leave-one-out": "loso",
+        "inner-loso": "loso",
+        "random": "random-holdout",
+        "random-hold-out": "random-holdout",
+        "single-random-holdout": "random-holdout",
+    }
+    scheme = aliases.get(scheme, scheme)
+    if scheme not in INNER_VALIDATION_SCHEMES:
+        raise ValueError(f"inner_validation_scheme must be one of {INNER_VALIDATION_SCHEMES}.")
+    return scheme
+
+
+def _selection_mode_for_inner_scheme(scheme):
+    scheme = _normalize_inner_validation_scheme(scheme)
+    return "nested_loso" if scheme == "loso" else "nested_random_holdout"
+
+
+def _inner_validation_participants(test_participant, outer_train_participants, *, scheme, seed):
+    scheme = _normalize_inner_validation_scheme(scheme)
+    outer_train_participants = tuple(int(participant) for participant in outer_train_participants)
+    if not outer_train_participants:
+        raise ValueError("At least one outer-training participant is required for inner validation.")
+    if scheme == "loso":
+        return outer_train_participants
+    rng = np.random.default_rng(np.random.SeedSequence([int(seed), int(test_participant)]))
+    return (outer_train_participants[int(rng.integers(0, len(outer_train_participants)))],)
+
+
 def _read_csv_rows(path):
     if not path:
         return []
@@ -764,11 +807,13 @@ def export_nested_cross_subject_stimulus(  # pylint: disable=too-many-arguments
     resume=False,
     write_incremental=False,
     outer_participants=None,
+    inner_validation_scheme="loso",
+    inner_validation_seed=0,
     progress=None,
     label_shuffle_control=False,
     label_shuffle_seed=0,
 ):
-    """Run nested LOSO cross-subject decoding and write compact CSV artifacts."""
+    """Run nested cross-subject decoding and write compact CSV artifacts."""
 
     existing_artifacts = (
         _read_nested_output_rows(
@@ -802,6 +847,8 @@ def export_nested_cross_subject_stimulus(  # pylint: disable=too-many-arguments
         progress=progress,
         existing_artifacts=existing_artifacts,
         after_outer_fold=write_outputs if write_incremental else None,
+        inner_validation_scheme=inner_validation_scheme,
+        inner_validation_seed=inner_validation_seed,
         label_shuffle_control=label_shuffle_control,
         label_shuffle_seed=label_shuffle_seed,
     )
@@ -835,6 +882,8 @@ def _evaluate_nested_outer_fold(
     feature_cache,
     inner_pair_cache,
     *,
+    inner_validation_scheme="loso",
+    inner_validation_seed=0,
     progress=None,
     label_shuffle_control=False,
     label_shuffle_seed=0,
@@ -848,6 +897,8 @@ def _evaluate_nested_outer_fold(
         candidate_configs,
         feature_cache,
         inner_pair_cache,
+        inner_validation_scheme=inner_validation_scheme,
+        inner_validation_seed=inner_validation_seed,
         progress=progress,
         label_shuffle_control=label_shuffle_control,
         label_shuffle_seed=label_shuffle_seed,
@@ -886,16 +937,25 @@ def _evaluate_nested_inner_rows(
     feature_cache,
     inner_pair_cache,
     *,
+    inner_validation_scheme="loso",
+    inner_validation_seed=0,
     progress=None,
     label_shuffle_control=False,
     label_shuffle_seed=0,
 ):
+    inner_validation_scheme = _normalize_inner_validation_scheme(inner_validation_scheme)
+    validation_participants = _inner_validation_participants(
+        test_participant,
+        outer_train_participants,
+        scheme=inner_validation_scheme,
+        seed=inner_validation_seed,
+    )
     inner_rows = []
     completed = 0
-    total = len(candidate_configs) * len(outer_train_participants)
+    total = len(candidate_configs) * len(validation_participants)
     for candidate_index, candidate_config in enumerate(candidate_configs, start=1):
         feature_sets = feature_cache[_feature_cache_key(candidate_config)]
-        for validation_participant in outer_train_participants:
+        for validation_participant in validation_participants:
             excluded_pair = tuple(sorted((int(test_participant), int(validation_participant))))
             pair_rows = _cached_nested_pair_rows(
                 candidate_index,
@@ -906,7 +966,14 @@ def _evaluate_nested_inner_rows(
                 label_shuffle_control=label_shuffle_control,
                 label_shuffle_seed=label_shuffle_seed,
             )
-            inner_rows.append(pair_rows[(int(test_participant), int(validation_participant))])
+            inner_rows.append(
+                pair_rows[(int(test_participant), int(validation_participant))]
+                | {
+                    "selection_mode": _selection_mode_for_inner_scheme(inner_validation_scheme),
+                    "inner_validation_scheme": inner_validation_scheme,
+                    "inner_validation_seed": int(inner_validation_seed),
+                }
+            )
             completed += 1
             if progress is not None:
                 progress(
@@ -1057,7 +1124,9 @@ def _select_nested_candidate(inner_rows):
         example = candidate_rows[0]
         summaries.append(
             {
-                "selection_mode": "nested_loso",
+                "selection_mode": example.get("selection_mode", "nested_loso"),
+                "inner_validation_scheme": example.get("inner_validation_scheme", "loso"),
+                "inner_validation_seed": example.get("inner_validation_seed", ""),
                 "selection_metric": DEFAULT_CROSS_SUBJECT_SELECTION_METRIC,
                 "outer_fold": int(example["outer_test_participant"]),
                 "test_participant": int(example["outer_test_participant"]),

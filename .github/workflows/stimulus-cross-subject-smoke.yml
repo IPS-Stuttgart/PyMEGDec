@@ -73,7 +73,7 @@ on:
       feature_mode:
         description: Feature mode passed to the cross-subject smoke command.
         required: true
-        default: sensor_mean
+        default: sensor_flat
         type: choice
         options:
           - sensor_mean
@@ -92,12 +92,26 @@ on:
       classifier:
         description: Classifier name.
         required: true
-        default: multiclass-svm
+        default: multinomial-logistic
         type: string
       components_pca:
         description: Number of PCA components, or inf.
         required: true
         default: "64"
+        type: string
+      label_control:
+        description: Optional training-label control for fixed-pipeline null benchmarks.
+        required: true
+        default: none
+        type: choice
+        options:
+          - none
+          - shuffle-within-subject
+          - circular-shift-within-subject
+      label_control_seed:
+        description: Seed for fixed-pipeline training-label controls.
+        required: true
+        default: "0"
         type: string
 
 permissions:
@@ -124,6 +138,8 @@ jobs:
       NORMALIZATION: ${{ inputs.normalization }}
       CLASSIFIER: ${{ inputs.classifier }}
       COMPONENTS_PCA: ${{ inputs.components_pca }}
+      LABEL_CONTROL: ${{ inputs.label_control }}
+      LABEL_CONTROL_SEED: ${{ inputs.label_control_seed }}
       MAIN_FILE_NAMES: >-
         Part1Data.mat,Part2Data.mat,Part3Data.mat,Part4Data.mat,Part6Data.mat,
         Part8Data.mat,Part9Data.mat,Part10Data.mat,Part13Data.mat,Part14Data.mat,
@@ -182,7 +198,10 @@ jobs:
             default_window_center="0.175"
           fi
           window_center="${WINDOW_CENTER:-${default_window_center}}"
-          python scripts/export_stimulus_cross_subject_smoke.py \
+          if [[ "${LABEL_CONTROL}" != "none" ]]; then
+            analysis_label="${analysis_label}_${LABEL_CONTROL//-/_}"
+          fi
+          python scripts/export_stimulus_cross_subject_smoke_controlled.py \
             --data-dir "${DATA_DIR}" \
             --participants "${PARTICIPANTS}" \
             --window-center "${window_center}" \
@@ -192,6 +211,8 @@ jobs:
             --normalization "${NORMALIZATION}" \
             --classifier "${CLASSIFIER}" \
             --components-pca "${COMPONENTS_PCA}" \
+            --label-control "${LABEL_CONTROL}" \
+            --label-control-seed "${LABEL_CONTROL_SEED}" \
             --outer-output "outputs/stimulus_cross_subject_${analysis_label}_outer.csv" \
             --summary-output "outputs/stimulus_cross_subject_${analysis_label}_group_summary.csv" \
             --predictions-output "outputs/stimulus_cross_subject_${analysis_label}_predictions.csv" \
@@ -209,7 +230,10 @@ jobs:
           from pathlib import Path
 
           benchmark_mode = os.environ["BENCHMARK_MODE"]
+          label_control = os.environ.get("LABEL_CONTROL", "none") or "none"
           analysis_label = benchmark_mode.replace("-", "_")
+          if label_control != "none":
+              analysis_label = f"{analysis_label}_{label_control.replace('-', '_')}"
           summary_path = Path(f"outputs/stimulus_cross_subject_{analysis_label}_group_summary.csv")
           outer_path = Path(f"outputs/stimulus_cross_subject_{analysis_label}_outer.csv")
           pairs_path = Path(f"outputs/stimulus_cross_subject_{analysis_label}_confusion_pairs.csv")
@@ -229,6 +253,9 @@ jobs:
               "| --- | ---: |",
               f"| benchmark mode | {benchmark_mode} |",
               f"| analysis label | {analysis_label} |",
+              f"| label control | {summary.get('label_control', label_control)} |",
+              f"| label control seed | {summary.get('label_control_seed', os.environ.get('LABEL_CONTROL_SEED', ''))} |",
+              f"| training labels controlled | {summary.get('training_labels_controlled', str(label_control != 'none').lower())} |",
               f"| folds | {summary['n_outer_folds']} |",
               f"| window center | {float(summary['window_center_s']):.3f} s |",
               f"| chance | {float(summary['chance_percent']):.2f}% |",

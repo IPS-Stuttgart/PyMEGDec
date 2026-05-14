@@ -370,6 +370,46 @@ class TestStimulusCrossSubject(unittest.TestCase):
         self.assertAlmostEqual(artifacts["group_summary"][0]["one_sided_exact_sign_p_value"], 1 / 16)
         self.assertEqual(fit_model.call_count, 16)
 
+    def test_nested_cross_subject_random_holdout_uses_one_inner_subject(self):
+        data_by_participant = {
+            1: _mat_data([1, 2, 1, 2], [-1.2, 1.2, -1.1, 1.1]),
+            2: _mat_data([1, 2, 1, 2], [-1.0, 1.0, -0.9, 0.9]),
+            3: _mat_data([1, 2, 1, 2], [-1.3, 1.3, -1.2, 1.2]),
+            4: _mat_data([1, 2, 1, 2], [-1.1, 1.1, -1.0, 1.0]),
+        }
+        candidate_configs = make_cross_subject_candidate_configs(
+            window_centers=(0.1, 0.2),
+            window_size=0.1,
+            feature_modes=("sensor_mean",),
+            normalizations=("none",),
+            classifiers=("multiclass-svm",),
+            classifier_params=(0.5,),
+            components_pca_values=(float("inf"),),
+            chance_classes=2,
+            signflip_permutations=128,
+        )
+
+        with patch("pymegdec.stimulus_cross_subject.sio.loadmat", side_effect=_loadmat_side_effect(data_by_participant)):
+            artifacts = evaluate_nested_cross_subject_stimulus(
+                "unused",
+                [1, 2, 3, 4],
+                candidate_configs=candidate_configs,
+                inner_validation_scheme="random-holdout",
+                inner_validation_seed=7,
+            )
+
+        self.assertEqual(len(artifacts["outer"]), 4)
+        self.assertEqual(len(artifacts["inner_validation"]), 8)
+        self.assertEqual({row["selection_mode"] for row in artifacts["inner_validation"]}, {"nested_random_holdout"})
+        self.assertEqual({row["inner_validation_scheme"] for row in artifacts["inner_validation"]}, {"random-holdout"})
+        self.assertEqual({row["inner_validation_seed"] for row in artifacts["inner_validation"]}, {7})
+        self.assertEqual({row["n_inner_folds"] for row in artifacts["selected"]}, {1})
+        self.assertEqual(artifacts["group_summary"][0]["selection_mode"], "nested_random_holdout")
+        self.assertEqual(artifacts["group_summary"][0]["inner_validation_scheme"], "random-holdout")
+        for row in artifacts["inner_validation"]:
+            self.assertNotEqual(row["outer_test_participant"], row["inner_validation_participant"])
+            self.assertEqual(row["n_inner_train_participants"], 2)
+
     def test_nested_cross_subject_can_evaluate_outer_subset(self):
         data_by_participant = {
             1: _mat_data([1, 2, 1, 2], [-1.2, 1.2, -1.1, 1.1]),

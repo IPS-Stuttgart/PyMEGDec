@@ -102,17 +102,16 @@ on:
         required: false
         default: "10"
         type: string
-      label_control:
-        description: Training-label control for nested null benchmarks.
+      inner_validation_scheme:
+        description: Inner model-selection scheme. random-holdout uses one validation participant per outer fold.
         required: true
-        default: none
+        default: random-holdout
         type: choice
         options:
-          - none
-          - shuffle-within-subject
-          - circular-shift-within-subject
-      label_control_seed:
-        description: Seed for the nested training-label control.
+          - random-holdout
+          - loso
+      inner_validation_seed:
+        description: Seed for random-holdout inner validation participant selection.
         required: true
         default: "0"
         type: string
@@ -151,8 +150,8 @@ jobs:
       CLASSIFIER_PARAMS: ${{ inputs.classifier_params }}
       COMPONENTS_PCA_VALUES: ${{ inputs.components_pca_values }}
       MAX_TRIALS_PER_CLASS_PER_PARTICIPANT: ${{ inputs.max_trials_per_class_per_participant }}
-      LABEL_CONTROL: ${{ inputs.label_control }}
-      LABEL_CONTROL_SEED: ${{ inputs.label_control_seed }}
+      INNER_VALIDATION_SCHEME: ${{ inputs.inner_validation_scheme }}
+      INNER_VALIDATION_SEED: ${{ inputs.inner_validation_seed }}
       STIMULUS_METADATA_PATH: ${{ inputs.stimulus_metadata_path }}
       CONFUSION_CATEGORY_COLUMNS: ${{ inputs.confusion_category_columns }}
       MAIN_FILE_NAMES: >-
@@ -207,11 +206,11 @@ jobs:
           set -euo pipefail
           mkdir -p outputs
           output_prefix="outputs/stimulus_cross_subject_nested"
-          if [[ "${LABEL_CONTROL}" != "none" ]]; then
-            output_prefix="outputs/stimulus_cross_subject_nested_${LABEL_CONTROL//-/_}"
+          if [[ "${INNER_VALIDATION_SCHEME}" != "loso" ]]; then
+            output_prefix="outputs/stimulus_cross_subject_nested_${INNER_VALIDATION_SCHEME//-/_}"
           fi
           args=(
-            python scripts/export_stimulus_cross_subject_nested_controlled.py
+            python scripts/export_stimulus_cross_subject_nested.py
             --data-dir "${DATA_DIR}"
             --participants "${PARTICIPANTS}"
             --window-centers "${WINDOW_CENTERS}"
@@ -223,8 +222,8 @@ jobs:
             --classifiers "${CLASSIFIERS}"
             --classifier-params "${CLASSIFIER_PARAMS}"
             --components-pca-values "${COMPONENTS_PCA_VALUES}"
-            --label-control "${LABEL_CONTROL}"
-            --label-control-seed "${LABEL_CONTROL_SEED}"
+            --inner-validation-scheme "${INNER_VALIDATION_SCHEME}"
+            --inner-validation-seed "${INNER_VALIDATION_SEED}"
             --outer-output "${output_prefix}_outer.csv"
             --summary-output "${output_prefix}_group_summary.csv"
             --inner-validation-output "${output_prefix}_inner_validation.csv"
@@ -273,10 +272,10 @@ jobs:
           import os
           from pathlib import Path
 
-          label_control = os.environ.get("LABEL_CONTROL", "none") or "none"
+          inner_validation_scheme = os.environ.get("INNER_VALIDATION_SCHEME", "loso") or "loso"
           output_prefix = "stimulus_cross_subject_nested"
-          if label_control != "none":
-              output_prefix = f"stimulus_cross_subject_nested_{label_control.replace('-', '_')}"
+          if inner_validation_scheme != "loso":
+              output_prefix = f"stimulus_cross_subject_nested_{inner_validation_scheme.replace('-', '_')}"
           summary_path = Path("outputs") / f"{output_prefix}_group_summary.csv"
           selected_path = Path("outputs") / f"{output_prefix}_selected.csv"
           pairs_path = Path("outputs") / f"{output_prefix}_confusion_pairs.csv"
@@ -320,9 +319,9 @@ jobs:
               "| --- | ---: |",
               f"| outer folds | {summary['n_outer_folds']} |",
               f"| candidates | {summary['n_candidates']} |",
-              f"| label control | {summary.get('label_control', label_control)} |",
-              f"| label control seed | {summary.get('label_control_seed', os.environ.get('LABEL_CONTROL_SEED', ''))} |",
-              f"| training labels controlled | {summary.get('training_labels_controlled', str(label_control != 'none').lower())} |",
+              f"| selection mode | {summary.get('selection_mode', '')} |",
+              f"| inner validation scheme | {summary.get('inner_validation_scheme', inner_validation_scheme)} |",
+              f"| inner validation seed | {summary.get('inner_validation_seed', os.environ.get('INNER_VALIDATION_SEED', ''))} |",
               f"| trial cap counts | {summary.get('max_trials_per_class_per_participant_counts', '')} |",
               f"| selected classifier counts | {summary.get('selected_classifier_counts', '')} |",
               f"| selected window center counts | {summary.get('selected_window_center_counts', '')} |",

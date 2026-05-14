@@ -37,6 +37,7 @@ from pymegdec.stimulus_cross_subject import (
     DEFAULT_CROSS_SUBJECT_PARTICIPANTS,
     DEFAULT_CROSS_SUBJECT_WINDOW_CENTER,
     DEFAULT_CROSS_SUBJECT_WINDOW_SIZE,
+    INNER_VALIDATION_SCHEMES,
     NORMALIZATION_MODES,
     CrossSubjectStimulusConfig,
     export_cross_subject_stimulus_smoke,
@@ -389,6 +390,13 @@ def _build_cross_subject_nested_parser(prog: str | None = None) -> argparse.Argu
         default=None,
         help="Optional deterministic cap on trials per stimulus class and participant for quick nested screening.",
     )
+    parser.add_argument(
+        "--inner-validation-scheme",
+        choices=INNER_VALIDATION_SCHEMES,
+        default="loso",
+        help="Inner model-selection scheme. random-holdout chooses one validation participant per outer fold.",
+    )
+    parser.add_argument("--inner-validation-seed", type=int, default=0, help="Seed for random-holdout inner validation participant selection.")
     parser.add_argument("--chance-classes", type=int, default=DEFAULT_CROSS_SUBJECT_CHANCE_CLASSES, help="Number of stimulus classes used for chance level.")
     parser.add_argument("--random-state", type=int, default=0, help="Random state passed to classifiers.")
     parser.add_argument(
@@ -451,6 +459,8 @@ def stimulus_cross_subject_nested(argv: Sequence[str] | None = None, prog: str |
         resume=args.resume,
         write_incremental=args.write_incremental,
         outer_participants=outer_participants,
+        inner_validation_scheme=args.inner_validation_scheme,
+        inner_validation_seed=args.inner_validation_seed,
         progress=lambda message: print(message, flush=True),
         label_shuffle_control=args.label_shuffle_control,
         label_shuffle_seed=args.label_shuffle_seed,
