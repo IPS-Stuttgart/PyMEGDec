@@ -1,0 +1,445 @@
+name: Manual stimulus M-CCA grid
+#checkov:skip=CKV_GHA_7:Manual workflow inputs are constrained to analysis parameters and used only after shell quoting.
+
+on:
+  workflow_dispatch:
+    inputs:
+      runner_type:
+        description: Runner backend used for the M-CCA grid.
+        required: true
+        default: self-hosted
+        type: choice
+        options: [github-hosted, self-hosted]
+      github_runner_label:
+        description: GitHub-hosted runner label used when runner_type=github-hosted.
+        required: true
+        default: ubuntu-latest
+        type: string
+      self_hosted_runner_label:
+        description: Self-hosted runner label used when runner_type=self-hosted.
+        required: true
+        default: self-hosted
+        type: string
+      python_version:
+        description: Python version used for the analysis environment.
+        required: true
+        default: "3.13"
+        type: string
+      use_nextcloud_data:
+        description: Restore/download/cache the MEG data before running.
+        required: true
+        default: true
+        type: boolean
+      data_cache_version:
+        description: MEG data cache version.
+        required: true
+        default: v2
+        type: string
+      data_cache_kind:
+        description: Cache-key prefix for the MEG files.
+        required: true
+        default: meg-data-all
+        type: string
+      data_dir:
+        description: Relative data directory to restore/populate.
+        required: true
+        default: .cache/meg-data-main
+        type: string
+      participants:
+        description: Participant ids such as 1-4,6,8.
+        required: true
+        default: "1-4,6,8,9,10,13-27"
+        type: string
+      outer_participants:
+        description: Optional held-out participant ids to evaluate in this run. Empty means all participants.
+        required: false
+        default: ""
+        type: string
+      window_center:
+        description: Stimulus decoding window center in seconds.
+        required: true
+        default: "0.175"
+        type: string
+      window_size:
+        description: Stimulus decoding window size in seconds.
+        required: true
+        default: "0.1"
+        type: string
+      baseline_window:
+        description: Baseline normalization window as start,stop in seconds.
+        required: true
+        default: "-0.5,0.0"
+        type: string
+      feature_mode:
+        description: Feature extraction mode.
+        required: true
+        default: sensor_flat
+        type: choice
+        options: [sensor_mean, sensor_flat]
+      normalization:
+        description: Subject-level normalization mode.
+        required: true
+        default: subject_baseline_z
+        type: choice
+        options: [none, subject_z, subject_trial_z, subject_baseline_z, subject_baseline_whiten]
+      classifier:
+        description: Classifier name.
+        required: true
+        default: multiclass-svm
+        type: string
+      classifier_param:
+        description: Classifier parameter. Use empty/default for classifier default.
+        required: false
+        default: ""
+        type: string
+      components_pca:
+        description: Downstream PCA component count, or inf.
+        required: true
+        default: "64"
+        type: string
+      max_trials_per_class_per_participant:
+        description: Optional screening trial cap per stimulus class and participant. Empty means all trials.
+        required: false
+        default: "10"
+        type: string
+      target_centering:
+        description: How to center the held-out participant before group-space projection.
+        required: true
+        default: target_unsupervised
+        type: choice
+        options: [group_mean, target_unsupervised]
+      signflip_permutations:
+        description: Monte Carlo sign-flip permutations for each group summary.
+        required: true
+        default: "5000"
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  mcca-grid:
+    name: M-CCA ${{ matrix.variant }}
+    runs-on: ${{ inputs.runner_type == 'github-hosted' && inputs.github_runner_label || inputs.self_hosted_runner_label }}
+    timeout-minutes: 720
+    strategy:
+      fail-fast: false
+      max-parallel: 3
+      matrix:
+        include:
+          - variant: c32_r1e-6_spca-none
+            mcca_components: "32"
+            mcca_regularization: "1e-6"
+            mcca_subject_pca_components: none
+          - variant: c32_r1e-6_spca128
+            mcca_components: "32"
+            mcca_regularization: "1e-6"
+            mcca_subject_pca_components: "128"
+          - variant: c32_r1e-4_spca-none
+            mcca_components: "32"
+            mcca_regularization: "1e-4"
+            mcca_subject_pca_components: none
+          - variant: c32_r1e-4_spca128
+            mcca_components: "32"
+            mcca_regularization: "1e-4"
+            mcca_subject_pca_components: "128"
+          - variant: c64_r1e-6_spca-none
+            mcca_components: "64"
+            mcca_regularization: "1e-6"
+            mcca_subject_pca_components: none
+          - variant: c64_r1e-6_spca128
+            mcca_components: "64"
+            mcca_regularization: "1e-6"
+            mcca_subject_pca_components: "128"
+          - variant: c64_r1e-4_spca-none
+            mcca_components: "64"
+            mcca_regularization: "1e-4"
+            mcca_subject_pca_components: none
+          - variant: c64_r1e-4_spca128
+            mcca_components: "64"
+            mcca_regularization: "1e-4"
+            mcca_subject_pca_components: "128"
+          - variant: c128_r1e-6_spca-none
+            mcca_components: "128"
+            mcca_regularization: "1e-6"
+            mcca_subject_pca_components: none
+          - variant: c128_r1e-6_spca128
+            mcca_components: "128"
+            mcca_regularization: "1e-6"
+            mcca_subject_pca_components: "128"
+          - variant: c128_r1e-4_spca-none
+            mcca_components: "128"
+            mcca_regularization: "1e-4"
+            mcca_subject_pca_components: none
+          - variant: c128_r1e-4_spca128
+            mcca_components: "128"
+            mcca_regularization: "1e-4"
+            mcca_subject_pca_components: "128"
+    env:
+      DATA_DIR: ${{ inputs.data_dir }}
+      USE_NEXTCLOUD_DATA: ${{ inputs.use_nextcloud_data }}
+      DATA_CACHE_VERSION: ${{ inputs.data_cache_version }}
+      DATA_CACHE_KIND: ${{ inputs.data_cache_kind }}
+      PARTICIPANTS: ${{ inputs.participants }}
+      OUTER_PARTICIPANTS: ${{ inputs.outer_participants }}
+      WINDOW_CENTER: ${{ inputs.window_center }}
+      WINDOW_SIZE: ${{ inputs.window_size }}
+      BASELINE_WINDOW: ${{ inputs.baseline_window }}
+      FEATURE_MODE: ${{ inputs.feature_mode }}
+      NORMALIZATION: ${{ inputs.normalization }}
+      CLASSIFIER: ${{ inputs.classifier }}
+      CLASSIFIER_PARAM: ${{ inputs.classifier_param }}
+      COMPONENTS_PCA: ${{ inputs.components_pca }}
+      MAX_TRIALS_PER_CLASS_PER_PARTICIPANT: ${{ inputs.max_trials_per_class_per_participant }}
+      TARGET_CENTERING: ${{ inputs.target_centering }}
+      SIGNFLIP_PERMUTATIONS: ${{ inputs.signflip_permutations }}
+      MAIN_FILE_NAMES: >-
+        Part1Data.mat,Part2Data.mat,Part3Data.mat,Part4Data.mat,Part6Data.mat,
+        Part8Data.mat,Part9Data.mat,Part10Data.mat,Part13Data.mat,Part14Data.mat,
+        Part15Data.mat,Part16Data.mat,Part17Data.mat,Part18Data.mat,Part19Data.mat,
+        Part20Data.mat,Part21Data.mat,Part22Data.mat,Part23Data.mat,Part24Data.mat,
+        Part25Data.mat,Part26Data.mat,Part27Data.mat
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Prepare main MEG data
+        if: ${{ env.USE_NEXTCLOUD_DATA == 'true' }}
+        timeout-minutes: 90
+        uses: ./.github/actions/prepare-meg-data
+        with:
+          data-dir: ${{ env.DATA_DIR }}
+          cache-version: ${{ env.DATA_CACHE_VERSION }}
+          cache-key: ${{ env.DATA_CACHE_KIND }}-${{ runner.os }}-${{ env.DATA_CACHE_VERSION }}
+          file-names: ${{ env.MAIN_FILE_NAMES }}
+          require-cue-files: "false"
+          expected-main-files: "23"
+          webdav-url: ${{ secrets.BUSHMEG_WEBDAV_URL }}
+          webdav-user: ${{ secrets.BUSHMEG_DATA_KEY }}
+          webdav-password: ${{ secrets.BUSHMEG_DATA_PASSWORD }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: ${{ inputs.python_version }}
+
+      - name: Install package
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          python -m pip install .
+
+      - name: Validate main data files
+        shell: bash
+        run: |
+          set -euo pipefail
+          main_count="$(find -L "${DATA_DIR}" -name 'Part*Data.mat' ! -name 'Part*CueData.mat' | wc -l | tr -d ' ')"
+          echo "Main files: ${main_count}"
+          test "${main_count}" -ge 23
+
+      - name: Run M-CCA grid variant
+        shell: bash
+        env:
+          VARIANT: ${{ matrix.variant }}
+          MCCA_COMPONENTS: ${{ matrix.mcca_components }}
+          MCCA_REGULARIZATION: ${{ matrix.mcca_regularization }}
+          MCCA_SUBJECT_PCA_COMPONENTS: ${{ matrix.mcca_subject_pca_components }}
+        run: |
+          set -euo pipefail
+          mkdir -p outputs
+          prefix="stimulus_cross_subject_mcca_grid_${VARIANT}"
+          args=(
+            pymegdec stimulus cross-subject-mcca
+            --data-dir "${DATA_DIR}"
+            --participants "${PARTICIPANTS}"
+            --window-center "${WINDOW_CENTER}"
+            --window-size "${WINDOW_SIZE}"
+            --baseline-window="${BASELINE_WINDOW}"
+            --feature-mode "${FEATURE_MODE}"
+            --normalization "${NORMALIZATION}"
+            --classifier "${CLASSIFIER}"
+            --components-pca "${COMPONENTS_PCA}"
+            --target-centering "${TARGET_CENTERING}"
+            --mcca-components "${MCCA_COMPONENTS}"
+            --mcca-regularization "${MCCA_REGULARIZATION}"
+            --mcca-sample-mode class_repetition
+            --signflip-permutations "${SIGNFLIP_PERMUTATIONS}"
+            --outer-output "outputs/${prefix}_outer.csv"
+            --summary-output "outputs/${prefix}_group_summary.csv"
+            --predictions-output "outputs/${prefix}_predictions.csv"
+            --confusion-output "outputs/${prefix}_confusion.csv"
+            --per-stimulus-output "outputs/${prefix}_per_stimulus.csv"
+            --confusion-pairs-output "outputs/${prefix}_confusion_pairs.csv"
+          )
+          if [[ -n "${OUTER_PARTICIPANTS}" ]]; then
+            args+=(--outer-participants "${OUTER_PARTICIPANTS}")
+          fi
+          if [[ -n "${CLASSIFIER_PARAM}" && "${CLASSIFIER_PARAM}" != "default" ]]; then
+            args+=(--classifier-param "${CLASSIFIER_PARAM}")
+          fi
+          if [[ -n "${MAX_TRIALS_PER_CLASS_PER_PARTICIPANT}" ]]; then
+            args+=(--max-trials-per-class-per-participant "${MAX_TRIALS_PER_CLASS_PER_PARTICIPANT}")
+          fi
+          if [[ "${MCCA_SUBJECT_PCA_COMPONENTS}" != "none" ]]; then
+            args+=(--mcca-subject-pca-components "${MCCA_SUBJECT_PCA_COMPONENTS}")
+          fi
+          printf 'Running variant %s\n' "${VARIANT}"
+          printf 'Command:'
+          printf ' %q' "${args[@]}"
+          printf '\n'
+          "${args[@]}"
+
+      - name: Append variant summary
+        if: ${{ always() }}
+        shell: bash
+        env:
+          VARIANT: ${{ matrix.variant }}
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import csv
+          import math
+          import os
+          from pathlib import Path
+
+          variant = os.environ["VARIANT"]
+          path = Path("outputs") / f"stimulus_cross_subject_mcca_grid_{variant}_group_summary.csv"
+          lines = ["# M-CCA grid variant", "", f"Variant: `{variant}`", ""]
+          if not path.exists():
+              lines.append("No summary CSV was produced.")
+          else:
+              with path.open(newline="", encoding="utf-8") as handle:
+                  row = next(csv.DictReader(handle))
+              def value(key, scale=1.0, suffix=""):
+                  raw = row.get(key, "")
+                  try:
+                      number = float(raw) * scale
+                  except ValueError:
+                      return raw
+                  if not math.isfinite(number):
+                      return "n/a"
+                  return f"{number:.3g}{suffix}"
+              lines.extend(
+                  [
+                      "| field | value |",
+                      "| --- | ---: |",
+                      f"| M-CCA components | {row.get('mcca_requested_components', '')} |",
+                      f"| M-CCA regularization | {row.get('mcca_regularization', '')} |",
+                      f"| subject PCA components | {row.get('mcca_subject_pca_components', '') or 'none'} |",
+                      f"| folds | {row.get('n_outer_folds', '')} |",
+                      f"| chance | {value('chance_percent', suffix='%')} |",
+                      f"| balanced accuracy | {value('balanced_percent_mean', suffix='%')} |",
+                      f"| balanced SEM | {value('balanced_accuracy_sem', scale=100.0, suffix='%')} |",
+                      f"| participants above chance | {row.get('participants_above_chance', '')}/{row.get('participants_total', '')} |",
+                      f"| sign-flip p | {value('one_sided_signflip_p_value')} |",
+                  ]
+              )
+          Path(os.environ["GITHUB_STEP_SUMMARY"]).write_text("\n".join(lines) + "\n", encoding="utf-8")
+          PY
+
+      - name: Upload M-CCA grid variant outputs
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: stimulus-mcca-grid-${{ matrix.variant }}
+          path: outputs/stimulus_cross_subject_mcca_grid_${{ matrix.variant }}_*.csv
+          if-no-files-found: warn
+
+  aggregate:
+    name: Aggregate M-CCA grid
+    needs: mcca-grid
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Download M-CCA grid artifacts
+        uses: actions/download-artifact@v7
+        with:
+          pattern: stimulus-mcca-grid-*
+          path: artifacts
+          merge-multiple: true
+
+      - name: Aggregate summaries
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p outputs
+          python - <<'PY'
+          import csv
+          import math
+          import os
+          from pathlib import Path
+
+          summary_paths = sorted(Path("artifacts").glob("*_group_summary.csv"))
+          rows = []
+          for path in summary_paths:
+              with path.open(newline="", encoding="utf-8") as handle:
+                  row = next(csv.DictReader(handle))
+              variant = path.name.removeprefix("stimulus_cross_subject_mcca_grid_").removesuffix("_group_summary.csv")
+              row = dict(row)
+              row["variant"] = variant
+              rows.append(row)
+
+          def as_float(row, key):
+              try:
+                  return float(row.get(key, "nan"))
+              except ValueError:
+                  return math.nan
+
+          rows.sort(key=lambda item: as_float(item, "balanced_accuracy_mean"), reverse=True)
+          fields = [
+              "variant",
+              "mcca_requested_components",
+              "mcca_regularization",
+              "mcca_subject_pca_components",
+              "n_outer_folds",
+              "chance_percent",
+              "balanced_percent_mean",
+              "balanced_accuracy_sem",
+              "participants_above_chance",
+              "participants_total",
+              "one_sided_exact_sign_p_value",
+              "one_sided_signflip_p_value",
+              "top2_accuracy_mean",
+              "top3_accuracy_mean",
+              "mean_true_label_rank_mean",
+          ]
+          out_path = Path("outputs/stimulus_cross_subject_mcca_grid_summary.csv")
+          with out_path.open("w", newline="", encoding="utf-8") as handle:
+              writer = csv.DictWriter(handle, fieldnames=fields, extrasaction="ignore")
+              writer.writeheader()
+              writer.writerows(rows)
+
+          lines = ["# M-CCA grid summary", ""]
+          if not rows:
+              lines.append("No M-CCA grid summaries were found.")
+          else:
+              lines.extend(
+                  [
+                      "| rank | variant | components | ridge | subject PCA | folds | balanced accuracy | SEM | above chance | sign-flip p |",
+                      "| ---: | --- | ---: | ---: | --- | ---: | ---: | ---: | ---: | ---: |",
+                  ]
+              )
+              for rank, row in enumerate(rows, start=1):
+                  sem = as_float(row, "balanced_accuracy_sem") * 100.0
+                  signflip = as_float(row, "one_sided_signflip_p_value")
+                  lines.append(
+                      f"| {rank} | `{row['variant']}` | {row.get('mcca_requested_components', '')} | "
+                      f"{row.get('mcca_regularization', '')} | {row.get('mcca_subject_pca_components', '') or 'none'} | "
+                      f"{row.get('n_outer_folds', '')} | {as_float(row, 'balanced_percent_mean'):.2f}% | "
+                      f"{sem:.2f}% | {row.get('participants_above_chance', '')}/{row.get('participants_total', '')} | "
+                      f"{signflip:.4g} |"
+                  )
+          Path(os.environ["GITHUB_STEP_SUMMARY"]).write_text("\n".join(lines) + "\n", encoding="utf-8")
+          PY
+
+      - name: Upload aggregated M-CCA grid summary
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: stimulus-mcca-grid-summary
+          path: outputs/stimulus_cross_subject_mcca_grid_summary.csv
+          if-no-files-found: warn
