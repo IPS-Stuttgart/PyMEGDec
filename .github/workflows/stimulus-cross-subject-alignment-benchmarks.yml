@@ -1,0 +1,351 @@
+name: Manual stimulus cross-subject alignment benchmarks
+#checkov:skip=CKV_GHA_7:Manual workflow inputs are constrained to analysis parameters and used only after shell quoting.
+
+on:
+  workflow_dispatch:
+    inputs:
+      runner_type:
+        description: Runner backend used for the alignment benchmark.
+        required: true
+        default: github-hosted
+        type: choice
+        options: [github-hosted, self-hosted]
+      github_runner_label:
+        description: GitHub-hosted runner label used when runner_type=github-hosted.
+        required: true
+        default: ubuntu-latest
+        type: string
+      self_hosted_runner_label:
+        description: Self-hosted runner label used when runner_type=self-hosted.
+        required: true
+        default: self-hosted
+        type: string
+      python_version:
+        description: Python version used for the analysis environment.
+        required: true
+        default: "3.13"
+        type: string
+      use_nextcloud_data:
+        description: Restore/download/cache the MEG data before running.
+        required: true
+        default: true
+        type: boolean
+      data_cache_version:
+        description: MEG data cache version.
+        required: true
+        default: v2
+        type: string
+      data_dir:
+        description: Relative data directory to restore/populate.
+        required: true
+        default: .cache/meg-data-main
+        type: string
+      methods:
+        description: Comma-separated methods to run. Supported values are hyperalignment,mcca.
+        required: true
+        default: hyperalignment,mcca
+        type: string
+      participants:
+        description: Participant ids such as 1-4,6,8.
+        required: true
+        default: "1-4,6,8,9,10,13-27"
+        type: string
+      outer_participants:
+        description: Optional held-out participant ids to evaluate in this run. Empty means all participants.
+        required: false
+        default: ""
+        type: string
+      window_center:
+        description: Stimulus decoding window center in seconds.
+        required: true
+        default: "0.175"
+        type: string
+      window_size:
+        description: Stimulus decoding window size in seconds.
+        required: true
+        default: "0.1"
+        type: string
+      baseline_window:
+        description: Baseline normalization window as start,stop in seconds.
+        required: true
+        default: "-0.5,0.0"
+        type: string
+      feature_mode:
+        description: Feature extraction mode.
+        required: true
+        default: sensor_flat
+        type: choice
+        options: [sensor_mean, sensor_flat]
+      normalization:
+        description: Subject-level normalization mode.
+        required: true
+        default: subject_baseline_z
+        type: choice
+        options: [none, subject_z, subject_trial_z, subject_baseline_z, subject_baseline_whiten]
+      classifier:
+        description: Classifier name.
+        required: true
+        default: multiclass-svm
+        type: string
+      classifier_param:
+        description: Classifier parameter. Use empty/default for classifier default.
+        required: false
+        default: ""
+        type: string
+      components_pca:
+        description: Downstream PCA component count, or inf.
+        required: true
+        default: "64"
+        type: string
+      max_trials_per_class_per_participant:
+        description: Optional screening trial cap per stimulus class and participant. Empty means all trials.
+        required: false
+        default: "10"
+        type: string
+      label_shuffle_control:
+        description: Shuffle training labels within each participant as a null control.
+        required: true
+        default: false
+        type: boolean
+      label_shuffle_seed:
+        description: Seed for the label-shuffle control.
+        required: true
+        default: "0"
+        type: string
+      hyper_components:
+        description: Hyperalignment shared-space components.
+        required: true
+        default: "64"
+        type: string
+      hyper_iterations:
+        description: Hyperalignment template iterations.
+        required: true
+        default: "10"
+        type: string
+      hyper_sample_mode:
+        description: Hyperalignment class sample mode.
+        required: true
+        default: class_repetition
+        type: string
+      mcca_components:
+        description: M-CCA shared-space components.
+        required: true
+        default: "64"
+        type: string
+      mcca_regularization:
+        description: M-CCA covariance regularization.
+        required: true
+        default: "1e-6"
+        type: string
+      mcca_subject_pca_components:
+        description: Optional per-subject PCA before M-CCA. Empty/none disables it.
+        required: false
+        default: ""
+        type: string
+      mcca_sample_mode:
+        description: M-CCA class sample mode.
+        required: true
+        default: class_repetition
+        type: string
+      target_centering:
+        description: How to center the held-out participant before group-space projection.
+        required: true
+        default: target_unsupervised
+        type: choice
+        options: [group_mean, target_unsupervised]
+
+permissions:
+  contents: read
+
+jobs:
+  cross-subject-alignments:
+    name: Cross-subject alignments
+    runs-on: ${{ inputs.runner_type == 'github-hosted' && inputs.github_runner_label || inputs.self_hosted_runner_label }}
+    timeout-minutes: 720
+    env:
+      DATA_DIR: ${{ inputs.data_dir }}
+      USE_NEXTCLOUD_DATA: ${{ inputs.use_nextcloud_data }}
+      DATA_CACHE_VERSION: ${{ inputs.data_cache_version }}
+      METHODS: ${{ inputs.methods }}
+      PARTICIPANTS: ${{ inputs.participants }}
+      OUTER_PARTICIPANTS: ${{ inputs.outer_participants }}
+      WINDOW_CENTER: ${{ inputs.window_center }}
+      WINDOW_SIZE: ${{ inputs.window_size }}
+      BASELINE_WINDOW: ${{ inputs.baseline_window }}
+      FEATURE_MODE: ${{ inputs.feature_mode }}
+      NORMALIZATION: ${{ inputs.normalization }}
+      CLASSIFIER: ${{ inputs.classifier }}
+      CLASSIFIER_PARAM: ${{ inputs.classifier_param }}
+      COMPONENTS_PCA: ${{ inputs.components_pca }}
+      MAX_TRIALS_PER_CLASS_PER_PARTICIPANT: ${{ inputs.max_trials_per_class_per_participant }}
+      LABEL_SHUFFLE_CONTROL: ${{ inputs.label_shuffle_control }}
+      LABEL_SHUFFLE_SEED: ${{ inputs.label_shuffle_seed }}
+      HYPER_COMPONENTS: ${{ inputs.hyper_components }}
+      HYPER_ITERATIONS: ${{ inputs.hyper_iterations }}
+      HYPER_SAMPLE_MODE: ${{ inputs.hyper_sample_mode }}
+      MCCA_COMPONENTS: ${{ inputs.mcca_components }}
+      MCCA_REGULARIZATION: ${{ inputs.mcca_regularization }}
+      MCCA_SUBJECT_PCA_COMPONENTS: ${{ inputs.mcca_subject_pca_components }}
+      MCCA_SAMPLE_MODE: ${{ inputs.mcca_sample_mode }}
+      TARGET_CENTERING: ${{ inputs.target_centering }}
+      MAIN_FILE_NAMES: >-
+        Part1Data.mat,Part2Data.mat,Part3Data.mat,Part4Data.mat,Part6Data.mat,
+        Part8Data.mat,Part9Data.mat,Part10Data.mat,Part13Data.mat,Part14Data.mat,
+        Part15Data.mat,Part16Data.mat,Part17Data.mat,Part18Data.mat,Part19Data.mat,
+        Part20Data.mat,Part21Data.mat,Part22Data.mat,Part23Data.mat,Part24Data.mat,
+        Part25Data.mat,Part26Data.mat,Part27Data.mat
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Prepare main MEG data
+        if: ${{ env.USE_NEXTCLOUD_DATA == 'true' }}
+        timeout-minutes: 90
+        uses: ./.github/actions/prepare-meg-data
+        with:
+          data-dir: ${{ env.DATA_DIR }}
+          cache-version: ${{ env.DATA_CACHE_VERSION }}
+          cache-key: meg-data-main-${{ runner.os }}-${{ env.DATA_CACHE_VERSION }}
+          file-names: ${{ env.MAIN_FILE_NAMES }}
+          require-cue-files: "false"
+          expected-main-files: "23"
+          webdav-url: ${{ secrets.BUSHMEG_WEBDAV_URL }}
+          webdav-user: ${{ secrets.BUSHMEG_DATA_KEY }}
+          webdav-password: ${{ secrets.BUSHMEG_DATA_PASSWORD }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: ${{ inputs.python_version }}
+
+      - name: Install package
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          python -m pip install .
+
+      - name: Validate main data files
+        shell: bash
+        run: |
+          set -euo pipefail
+          main_count="$(find -L "${DATA_DIR}" -name 'Part*Data.mat' ! -name 'Part*CueData.mat' | wc -l | tr -d ' ')"
+          echo "Main files: ${main_count}"
+          test "${main_count}" -ge 23
+
+      - name: Run alignment benchmarks
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p outputs
+          normalized_methods=",$(echo "${METHODS}" | tr '[:upper:]' '[:lower:]' | tr -d ' '),"
+          common_args=(
+            --data-dir "${DATA_DIR}"
+            --participants "${PARTICIPANTS}"
+            --window-center "${WINDOW_CENTER}"
+            --window-size "${WINDOW_SIZE}"
+            --baseline-window "${BASELINE_WINDOW}"
+            --feature-mode "${FEATURE_MODE}"
+            --normalization "${NORMALIZATION}"
+            --classifier "${CLASSIFIER}"
+            --components-pca "${COMPONENTS_PCA}"
+            --target-centering "${TARGET_CENTERING}"
+          )
+          if [[ -n "${OUTER_PARTICIPANTS}" ]]; then
+            common_args+=(--outer-participants "${OUTER_PARTICIPANTS}")
+          fi
+          if [[ -n "${CLASSIFIER_PARAM}" && "${CLASSIFIER_PARAM}" != "default" ]]; then
+            common_args+=(--classifier-param "${CLASSIFIER_PARAM}")
+          fi
+          if [[ -n "${MAX_TRIALS_PER_CLASS_PER_PARTICIPANT}" ]]; then
+            common_args+=(--max-trials-per-class-per-participant "${MAX_TRIALS_PER_CLASS_PER_PARTICIPANT}")
+          fi
+          if [[ "${LABEL_SHUFFLE_CONTROL}" == "true" ]]; then
+            common_args+=(--label-shuffle-control --label-shuffle-seed "${LABEL_SHUFFLE_SEED}")
+          fi
+
+          if [[ "${normalized_methods}" == *",hyperalignment,"* ]]; then
+            echo "Running cross-subject hyperalignment benchmark"
+            pymegdec stimulus cross-subject-hyperalignment \
+              "${common_args[@]}" \
+              --hyper-components "${HYPER_COMPONENTS}" \
+              --hyper-iterations "${HYPER_ITERATIONS}" \
+              --hyper-sample-mode "${HYPER_SAMPLE_MODE}" \
+              --outer-output outputs/stimulus_cross_subject_hyperalignment_outer.csv \
+              --summary-output outputs/stimulus_cross_subject_hyperalignment_group_summary.csv
+          fi
+
+          if [[ "${normalized_methods}" == *",mcca,"* ]]; then
+            echo "Running cross-subject M-CCA benchmark"
+            mcca_args=(
+              pymegdec stimulus cross-subject-mcca
+              "${common_args[@]}"
+              --mcca-components "${MCCA_COMPONENTS}"
+              --mcca-regularization "${MCCA_REGULARIZATION}"
+              --mcca-sample-mode "${MCCA_SAMPLE_MODE}"
+              --outer-output outputs/stimulus_cross_subject_mcca_outer.csv
+              --summary-output outputs/stimulus_cross_subject_mcca_group_summary.csv
+              --predictions-output outputs/stimulus_cross_subject_mcca_predictions.csv
+              --confusion-output outputs/stimulus_cross_subject_mcca_confusion.csv
+              --per-stimulus-output outputs/stimulus_cross_subject_mcca_per_stimulus.csv
+              --confusion-pairs-output outputs/stimulus_cross_subject_mcca_confusion_pairs.csv
+            )
+            if [[ -n "${MCCA_SUBJECT_PCA_COMPONENTS}" ]]; then
+              mcca_args+=(--mcca-subject-pca-components "${MCCA_SUBJECT_PCA_COMPONENTS}")
+            fi
+            "${mcca_args[@]}"
+          fi
+
+      - name: Append workflow summary
+        if: ${{ always() }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import csv
+          import math
+          import os
+          from pathlib import Path
+
+          out = Path("outputs")
+          lines = [
+              "# Stimulus cross-subject alignment benchmarks",
+              "",
+              "LOSO image-identity decoding using only `Part*Data.mat` with shared-space alignment methods.",
+              "",
+              "| method | folds | chance | balanced accuracy | SEM | participants above chance | sign-flip p |",
+              "| --- | ---: | ---: | ---: | ---: | ---: | ---: |",
+          ]
+          rows_written = 0
+          for method, label in (("hyperalignment", "Hyperalignment"), ("mcca", "M-CCA")):
+              path = out / f"stimulus_cross_subject_{method}_group_summary.csv"
+              if not path.exists():
+                  continue
+              with path.open(newline="", encoding="utf-8") as handle:
+                  row = next(csv.DictReader(handle))
+              def pct(key):
+                  value = float(row.get(key, "nan"))
+                  return "n/a" if not math.isfinite(value) else f"{value:.2f}%"
+              lines.append(
+                  f"| {label} | {row.get('n_outer_folds', '')} | "
+                  f"{float(row.get('chance_percent', 'nan')):.2f}% | "
+                  f"{pct('balanced_percent_mean')} | "
+                  f"{100.0 * float(row.get('balanced_accuracy_sem', 'nan')):.2f}% | "
+                  f"{row.get('participants_above_chance', '')}/{row.get('participants_total', '')} | "
+                  f"{float(row.get('one_sided_signflip_p_value', 'nan')):.4g} |"
+              )
+              rows_written += 1
+          if rows_written == 0:
+              lines.append("| n/a | 0 | n/a | n/a | n/a | n/a | n/a |")
+              lines.extend(["", "No alignment benchmark CSV outputs were produced."])
+          Path(os.environ["GITHUB_STEP_SUMMARY"]).write_text("\n".join(lines) + "\n", encoding="utf-8")
+          PY
+
+      - name: Upload cross-subject alignment outputs
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: stimulus-cross-subject-alignment-outputs
+          path: outputs/stimulus_cross_subject_*.csv
+          if-no-files-found: warn
