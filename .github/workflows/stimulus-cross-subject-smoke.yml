@@ -55,6 +55,14 @@ on:
         options:
           - poststimulus
           - prestimulus-control
+      analysis_kind:
+        description: Fixed-pipeline analysis implementation.
+        required: true
+        default: standard
+        type: choice
+        options:
+          - standard
+          - mcca
       window_center:
         description: Stimulus decoding window center in seconds. Leave empty to use the benchmark-mode preset.
         required: false
@@ -113,6 +121,47 @@ on:
         required: true
         default: "0"
         type: string
+      mcca_components:
+        description: Number of M-CCA components, or inf. Used only when analysis_kind=mcca.
+        required: true
+        default: "64"
+        type: string
+      mcca_regularization:
+        description: M-CCA ridge regularization. Used only when analysis_kind=mcca.
+        required: true
+        default: "1e-6"
+        type: string
+      mcca_subject_pca_components:
+        description: Optional within-subject M-CCA rank cap; use none or inf. Used only when analysis_kind=mcca.
+        required: true
+        default: "128"
+        type: string
+      mcca_sample_mode:
+        description: Class-aligned M-CCA row construction. Used only when analysis_kind=mcca.
+        required: true
+        default: class_repetition
+        type: choice
+        options:
+          - class_mean
+          - class_repetition
+      mcca_repetitions_per_class:
+        description: Optional class_repetition cap per class. Empty means all repetitions.
+        required: false
+        default: ""
+        type: string
+      target_calibration_trials_per_class:
+        description: Labeled target trials per class used only for target projection calibration.
+        required: true
+        default: "0"
+        type: string
+      target_centering:
+        description: Centering for calibration-free group M-CCA projection.
+        required: true
+        default: target_unsupervised
+        type: choice
+        options:
+          - target_unsupervised
+          - group_mean
 
 permissions:
   contents: read
@@ -131,6 +180,7 @@ jobs:
       DATA_CACHE_VERSION: ${{ inputs.data_cache_version }}
       PARTICIPANTS: ${{ inputs.participants }}
       BENCHMARK_MODE: ${{ inputs.benchmark_mode }}
+      ANALYSIS_KIND: ${{ inputs.analysis_kind }}
       WINDOW_CENTER: ${{ inputs.window_center }}
       WINDOW_SIZE: ${{ inputs.window_size }}
       BASELINE_WINDOW: ${{ inputs.baseline_window }}
@@ -140,6 +190,13 @@ jobs:
       COMPONENTS_PCA: ${{ inputs.components_pca }}
       LABEL_CONTROL: ${{ inputs.label_control }}
       LABEL_CONTROL_SEED: ${{ inputs.label_control_seed }}
+      MCCA_COMPONENTS: ${{ inputs.mcca_components }}
+      MCCA_REGULARIZATION: ${{ inputs.mcca_regularization }}
+      MCCA_SUBJECT_PCA_COMPONENTS: ${{ inputs.mcca_subject_pca_components }}
+      MCCA_SAMPLE_MODE: ${{ inputs.mcca_sample_mode }}
+      MCCA_REPETITIONS_PER_CLASS: ${{ inputs.mcca_repetitions_per_class }}
+      TARGET_CALIBRATION_TRIALS_PER_CLASS: ${{ inputs.target_calibration_trials_per_class }}
+      TARGET_CENTERING: ${{ inputs.target_centering }}
       MAIN_FILE_NAMES: >-
         Part1Data.mat,Part2Data.mat,Part3Data.mat,Part4Data.mat,Part6Data.mat,
         Part8Data.mat,Part9Data.mat,Part10Data.mat,Part13Data.mat,Part14Data.mat,
@@ -201,24 +258,56 @@ jobs:
           if [[ "${LABEL_CONTROL}" != "none" ]]; then
             analysis_label="${analysis_label}_${LABEL_CONTROL//-/_}"
           fi
-          python scripts/export_stimulus_cross_subject_smoke_controlled.py \
-            --data-dir "${DATA_DIR}" \
-            --participants "${PARTICIPANTS}" \
-            --window-center "${window_center}" \
-            --window-size "${WINDOW_SIZE}" \
-            --baseline-window="${BASELINE_WINDOW}" \
-            --feature-mode "${FEATURE_MODE}" \
-            --normalization "${NORMALIZATION}" \
-            --classifier "${CLASSIFIER}" \
-            --components-pca "${COMPONENTS_PCA}" \
-            --label-control "${LABEL_CONTROL}" \
-            --label-control-seed "${LABEL_CONTROL_SEED}" \
-            --outer-output "outputs/stimulus_cross_subject_${analysis_label}_outer.csv" \
-            --summary-output "outputs/stimulus_cross_subject_${analysis_label}_group_summary.csv" \
-            --predictions-output "outputs/stimulus_cross_subject_${analysis_label}_predictions.csv" \
-            --confusion-output "outputs/stimulus_cross_subject_${analysis_label}_confusion.csv" \
-            --per-stimulus-output "outputs/stimulus_cross_subject_${analysis_label}_per_stimulus.csv" \
-            --confusion-pairs-output "outputs/stimulus_cross_subject_${analysis_label}_confusion_pairs.csv"
+          if [[ "${ANALYSIS_KIND}" == "mcca" ]]; then
+            analysis_label="${analysis_label}_mcca"
+            args=(
+              python -m pymegdec.stimulus_mcca
+              --data-dir "${DATA_DIR}"
+              --participants "${PARTICIPANTS}"
+              --window-center "${window_center}"
+              --window-size "${WINDOW_SIZE}"
+              --baseline-window="${BASELINE_WINDOW}"
+              --feature-mode "${FEATURE_MODE}"
+              --normalization "${NORMALIZATION}"
+              --classifier "${CLASSIFIER}"
+              --components-pca "${COMPONENTS_PCA}"
+              --mcca-components "${MCCA_COMPONENTS}"
+              --mcca-regularization "${MCCA_REGULARIZATION}"
+              --mcca-subject-pca-components "${MCCA_SUBJECT_PCA_COMPONENTS}"
+              --mcca-sample-mode "${MCCA_SAMPLE_MODE}"
+              --target-calibration-trials-per-class "${TARGET_CALIBRATION_TRIALS_PER_CLASS}"
+              --target-centering "${TARGET_CENTERING}"
+              --outer-output "outputs/stimulus_cross_subject_${analysis_label}_outer.csv"
+              --summary-output "outputs/stimulus_cross_subject_${analysis_label}_group_summary.csv"
+              --predictions-output "outputs/stimulus_cross_subject_${analysis_label}_predictions.csv"
+              --confusion-output "outputs/stimulus_cross_subject_${analysis_label}_confusion.csv"
+              --per-stimulus-output "outputs/stimulus_cross_subject_${analysis_label}_per_stimulus.csv"
+              --confusion-pairs-output "outputs/stimulus_cross_subject_${analysis_label}_confusion_pairs.csv"
+            )
+            if [[ -n "${MCCA_REPETITIONS_PER_CLASS}" ]]; then
+              args+=(--mcca-repetitions-per-class "${MCCA_REPETITIONS_PER_CLASS}")
+            fi
+            "${args[@]}"
+          else
+            python scripts/export_stimulus_cross_subject_smoke_controlled.py \
+              --data-dir "${DATA_DIR}" \
+              --participants "${PARTICIPANTS}" \
+              --window-center "${window_center}" \
+              --window-size "${WINDOW_SIZE}" \
+              --baseline-window="${BASELINE_WINDOW}" \
+              --feature-mode "${FEATURE_MODE}" \
+              --normalization "${NORMALIZATION}" \
+              --classifier "${CLASSIFIER}" \
+              --components-pca "${COMPONENTS_PCA}" \
+              --label-control "${LABEL_CONTROL}" \
+              --label-control-seed "${LABEL_CONTROL_SEED}" \
+              --outer-output "outputs/stimulus_cross_subject_${analysis_label}_outer.csv" \
+              --summary-output "outputs/stimulus_cross_subject_${analysis_label}_group_summary.csv" \
+              --predictions-output "outputs/stimulus_cross_subject_${analysis_label}_predictions.csv" \
+              --confusion-output "outputs/stimulus_cross_subject_${analysis_label}_confusion.csv" \
+              --per-stimulus-output "outputs/stimulus_cross_subject_${analysis_label}_per_stimulus.csv" \
+              --confusion-pairs-output "outputs/stimulus_cross_subject_${analysis_label}_confusion_pairs.csv"
+          fi
 
       - name: Append workflow summary
         shell: bash
@@ -230,10 +319,13 @@ jobs:
           from pathlib import Path
 
           benchmark_mode = os.environ["BENCHMARK_MODE"]
+          analysis_kind = os.environ.get("ANALYSIS_KIND", "standard") or "standard"
           label_control = os.environ.get("LABEL_CONTROL", "none") or "none"
           analysis_label = benchmark_mode.replace("-", "_")
           if label_control != "none":
               analysis_label = f"{analysis_label}_{label_control.replace('-', '_')}"
+          if analysis_kind == "mcca":
+              analysis_label = f"{analysis_label}_mcca"
           summary_path = Path(f"outputs/stimulus_cross_subject_{analysis_label}_group_summary.csv")
           outer_path = Path(f"outputs/stimulus_cross_subject_{analysis_label}_outer.csv")
           pairs_path = Path(f"outputs/stimulus_cross_subject_{analysis_label}_confusion_pairs.csv")
@@ -252,6 +344,7 @@ jobs:
               "| metric | value |",
               "| --- | ---: |",
               f"| benchmark mode | {benchmark_mode} |",
+              f"| analysis kind | {analysis_kind} |",
               f"| analysis label | {analysis_label} |",
               f"| label control | {summary.get('label_control', label_control)} |",
               f"| label control seed | {summary.get('label_control_seed', os.environ.get('LABEL_CONTROL_SEED', ''))} |",
