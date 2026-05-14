@@ -16,9 +16,12 @@ import matplotlib  # noqa: E402
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
 import pandas as pd  # noqa: E402
-
 from pymegdec.alpha_metrics import write_alpha_metrics_csv  # noqa: E402
-from pymegdec.cli import parse_classifier_param, parse_float_list, parse_int_or_inf  # noqa: E402
+from pymegdec.cli import (  # noqa: E402
+    parse_classifier_param,
+    parse_float_list,
+    parse_int_or_inf,
+)
 from pymegdec.data_config import resolve_data_folder  # noqa: E402
 from pymegdec.reaction_time_analysis import parse_participant_spec  # noqa: E402
 from pymegdec.stimulus_cross_subject import (  # noqa: E402

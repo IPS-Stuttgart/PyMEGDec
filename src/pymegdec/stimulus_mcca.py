@@ -8,12 +8,12 @@ from dataclasses import dataclass
 from math import comb
 
 import numpy as np
-from reptrace.decoding.mcca import CLASS_ALIGNMENT_SAMPLE_MODES, fit_class_mcca
-from reptrace.decoding.windowed import fit_window_model, predict_window_model, transform_window_features
-from sklearn.metrics import accuracy_score, balanced_accuracy_score
-
 from pymegdec.alpha_metrics import write_alpha_metrics_csv
-from pymegdec.classifiers import get_default_classifier_param, should_use_default_classifier_param, train_multiclass_classifier
+from pymegdec.classifiers import (
+    get_default_classifier_param,
+    should_use_default_classifier_param,
+    train_multiclass_classifier,
+)
 from pymegdec.cli import normalize_argv, parse_classifier_param, parse_int_or_inf
 from pymegdec.data_config import resolve_data_folder
 from pymegdec.reaction_time_analysis import parse_participant_spec
@@ -33,6 +33,13 @@ from pymegdec.stimulus_cross_subject import (
     summarize_cross_subject_confusion_pairs,
     summarize_cross_subject_predictions,
 )
+from reptrace.decoding.mcca import CLASS_ALIGNMENT_SAMPLE_MODES, fit_class_mcca
+from reptrace.decoding.windowed import (
+    fit_window_model,
+    predict_window_model,
+    transform_window_features,
+)
+from sklearn.metrics import accuracy_score, balanced_accuracy_score
 
 TARGET_CENTERING_MODES = ("group_mean", "target_unsupervised")
 
