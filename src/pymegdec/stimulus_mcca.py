@@ -12,6 +12,12 @@ from reptrace.decoding.mcca import CLASS_ALIGNMENT_SAMPLE_MODES, fit_class_mcca
 from reptrace.decoding.windowed import fit_window_model, predict_window_model, transform_window_features
 from sklearn.metrics import accuracy_score, balanced_accuracy_score
 
+from pymegdec.alignment_window import (
+    resolved_alignment_window,
+    transform_with_alignment_projection,
+    uses_separate_alignment_window,
+    validate_paired_feature_sets,
+)
 from pymegdec.alpha_metrics import write_alpha_metrics_csv
 from pymegdec.classifiers import get_default_classifier_param, should_use_default_classifier_param, train_multiclass_classifier
 from pymegdec.cli import normalize_argv, parse_classifier_param, parse_int_or_inf
@@ -41,6 +47,8 @@ TARGET_CENTERING_MODES = ("group_mean", "target_unsupervised")
 class CrossSubjectMCCAConfig:  # pylint: disable=too-many-instance-attributes
     window_center: float = DEFAULT_CROSS_SUBJECT_WINDOW_CENTER
     window_size: float = DEFAULT_CROSS_SUBJECT_WINDOW_SIZE
+    alignment_window_center: float | None = None
+    alignment_window_size: float | None = None
     baseline_window: tuple[float, float] = DEFAULT_CROSS_SUBJECT_BASELINE_WINDOW
     feature_mode: str = "sensor_flat"
     normalization: str = DEFAULT_CROSS_SUBJECT_NORMALIZATION
@@ -69,26 +77,23 @@ def evaluate_cross_subject_mcca(data_folder, participants, *, config=None, outer
         raise ValueError("At least three participants are required.")
     if set(outer_participants) - set(participants):
         raise ValueError("outer_participants must be a subset of participants.")
-    feature_config = CrossSubjectStimulusConfig(
-        window_center=config.window_center,
-        window_size=config.window_size,
-        baseline_window=config.baseline_window,
-        feature_mode=config.feature_mode,
-        normalization=config.normalization,
-        classifier=config.classifier,
-        classifier_param=config.classifier_param,
-        components_pca=config.components_pca,
-        max_trials_per_class_per_participant=config.max_trials_per_class_per_participant,
-        chance_classes=config.chance_classes,
-        random_state=config.random_state,
-        signflip_permutations=config.signflip_permutations,
-        signflip_seed=config.signflip_seed,
-    )
+    feature_config = _feature_config(config, window_center=config.window_center, window_size=config.window_size)
+    alignment_window = resolved_alignment_window(config)
+    alignment_config = _feature_config(config, window_center=alignment_window.center, window_size=alignment_window.size)
     sets = []
+    alignment_sets = []
     for participant in participants:
         if progress:
             progress(f"LOAD participant={participant}")
-        sets.append(load_participant_stimulus_features(data_folder, participant, config=feature_config))
+        feature_set = load_participant_stimulus_features(data_folder, participant, config=feature_config)
+        if uses_separate_alignment_window(config):
+            alignment_set = load_participant_stimulus_features(data_folder, participant, config=alignment_config)
+            validate_paired_feature_sets(feature_set, alignment_set, participant=participant)
+        else:
+            alignment_set = feature_set
+        sets.append(feature_set)
+        alignment_sets.append(alignment_set)
+    alignment_sets_by_participant = {item.participant: item for item in alignment_sets}
     classifier_param = config.classifier_param
     if should_use_default_classifier_param(classifier_param):
         classifier_param = get_default_classifier_param(config.classifier)
@@ -98,7 +103,17 @@ def evaluate_cross_subject_mcca(data_folder, participants, *, config=None, outer
             progress(f"START outer_test_participant={test_participant}")
         train_sets = [item for item in sets if item.participant != test_participant]
         test_set = next(item for item in sets if item.participant == test_participant)
-        outer, preds = _fold(train_sets, test_set, config, classifier_param, label_shuffle_seed if label_shuffle_control else None)
+        train_alignment_sets = [alignment_sets_by_participant[item.participant] for item in train_sets]
+        test_alignment_set = alignment_sets_by_participant[test_set.participant]
+        outer, preds = _fold(
+            train_sets,
+            test_set,
+            train_alignment_sets,
+            test_alignment_set,
+            config,
+            classifier_param,
+            label_shuffle_seed if label_shuffle_control else None,
+        )
         outer.update(label_shuffle_control=bool(label_shuffle_control), label_shuffle_seed=int(label_shuffle_seed) if label_shuffle_control else "")
         for row in preds:
             row.update(label_shuffle_control=bool(label_shuffle_control), label_shuffle_seed=int(label_shuffle_seed) if label_shuffle_control else "")
@@ -155,11 +170,11 @@ def export_cross_subject_mcca(  # pylint: disable=too-many-arguments
     return artifacts
 
 
-def _fold(train_sets, test_set, config, classifier_param, label_shuffle_seed):
+def _fold(train_sets, test_set, train_alignment_sets, test_alignment_set, config, classifier_param, label_shuffle_seed):
     labels_by_subject = {item.participant: _labels(item.labels, label_shuffle_seed, test_set.participant, item.participant) for item in train_sets}
-    features_by_subject = {item.participant: item.features for item in train_sets}
+    alignment_features_by_subject = {item.participant: alignment_set.features for item, alignment_set in zip(train_sets, train_alignment_sets, strict=True)}
     model, alignment = fit_class_mcca(
-        features_by_subject,
+        alignment_features_by_subject,
         labels_by_subject,
         sample_mode=config.mcca_sample_mode,
         n_repetitions_per_class=config.mcca_repetitions_per_class,
@@ -167,10 +182,14 @@ def _fold(train_sets, test_set, config, classifier_param, label_shuffle_seed):
         regularization=config.mcca_regularization,
         subject_pca_components=config.mcca_subject_pca_components,
     )
-    train_x = np.vstack([model.transform(item.participant, item.features) for item in train_sets])
+    train_x = np.vstack(
+        [
+            _transform_fitted_subject(model, item, alignment_set)
+            for item, alignment_set in zip(train_sets, train_alignment_sets, strict=True)
+        ]
+    )
     train_y = np.concatenate([labels_by_subject[item.participant] for item in train_sets])
-    test_mean = np.mean(test_set.features, axis=0) if config.target_centering == "target_unsupervised" else None
-    test_x = model.transform_group(test_set.features, feature_mean=test_mean)
+    test_x = _transform_group_subject(model, test_set, test_alignment_set, config)
     bundle = fit_window_model(
         train_x,
         train_y,
@@ -265,11 +284,16 @@ def summarize_cross_subject_mcca(outer_rows, *, config=None):
 
 
 def _meta(config):
+    alignment_window = resolved_alignment_window(config)
     return {
         "window_center_s": config.window_center,
         "window_size_s": config.window_size,
         "window_start_s": config.window_center - config.window_size / 2,
         "window_stop_s": config.window_center + config.window_size / 2,
+        "alignment_window_center_s": alignment_window.center,
+        "alignment_window_size_s": alignment_window.size,
+        "alignment_window_start_s": alignment_window.start,
+        "alignment_window_stop_s": alignment_window.stop,
         "baseline_window_start_s": config.baseline_window[0],
         "baseline_window_stop_s": config.baseline_window[1],
         "feature_mode": config.feature_mode,
@@ -301,6 +325,50 @@ def _score_matrix(bundle, features):
     if classes is None and hasattr(model, "named_steps"):
         classes = getattr(list(model.named_steps.values())[-1], "classes_", None)
     return scores, None if classes is None else np.asarray(classes)
+
+
+def _feature_config(config, *, window_center, window_size):
+    return CrossSubjectStimulusConfig(
+        window_center=window_center,
+        window_size=window_size,
+        baseline_window=config.baseline_window,
+        feature_mode=config.feature_mode,
+        normalization=config.normalization,
+        classifier=config.classifier,
+        classifier_param=config.classifier_param,
+        components_pca=config.components_pca,
+        max_trials_per_class_per_participant=config.max_trials_per_class_per_participant,
+        chance_classes=config.chance_classes,
+        random_state=config.random_state,
+        signflip_permutations=config.signflip_permutations,
+        signflip_seed=config.signflip_seed,
+    )
+
+
+def _transform_fitted_subject(model, feature_set, alignment_set):
+    projection = model.projections[feature_set.participant]
+    return transform_with_alignment_projection(
+        feature_set.features,
+        decode_feature_set=feature_set,
+        projection=projection.projection,
+        projection_feature_mean=projection.feature_mean,
+        projection_feature_set=alignment_set,
+    )
+
+
+def _transform_group_subject(model, feature_set, alignment_set, config):
+    if model.group_projection is None or model.group_feature_mean is None:
+        raise ValueError("A group M-CCA projection is unavailable for the held-out participant.")
+    target_mean = np.mean(feature_set.features, axis=0) if config.target_centering == "target_unsupervised" else None
+    return transform_with_alignment_projection(
+        feature_set.features,
+        decode_feature_set=feature_set,
+        projection=model.group_projection,
+        projection_feature_mean=model.group_feature_mean,
+        projection_feature_set=alignment_set,
+        feature_mean=target_mean,
+        feature_mean_set=feature_set if target_mean is not None else None,
+    )
 
 
 def _rank_metrics(scores, classes, y_true):
@@ -341,6 +409,10 @@ def _checked(config):
         raise ValueError("Unsupported feature mode or normalization.")
     if config.mcca_sample_mode not in CLASS_ALIGNMENT_SAMPLE_MODES or config.target_centering not in TARGET_CENTERING_MODES:
         raise ValueError("Unsupported M-CCA mode.")
+    if float(config.window_size) <= 0:
+        raise ValueError("window_size must be positive.")
+    if resolved_alignment_window(config).size <= 0:
+        raise ValueError("alignment_window_size must be positive.")
     return config
 
 
@@ -391,6 +463,8 @@ def _parser(prog=None):
     parser.add_argument("--outer-participants", default=None)
     parser.add_argument("--window-center", type=float, default=DEFAULT_CROSS_SUBJECT_WINDOW_CENTER)
     parser.add_argument("--window-size", type=float, default=DEFAULT_CROSS_SUBJECT_WINDOW_SIZE)
+    parser.add_argument("--alignment-window-center", type=float, default=None)
+    parser.add_argument("--alignment-window-size", type=float, default=None)
     parser.add_argument("--baseline-window", type=_parse_window, default=DEFAULT_CROSS_SUBJECT_BASELINE_WINDOW)
     parser.add_argument("--feature-mode", choices=FEATURE_MODES, default="sensor_flat")
     parser.add_argument("--normalization", choices=NORMALIZATION_MODES, default=DEFAULT_CROSS_SUBJECT_NORMALIZATION)
@@ -426,6 +500,8 @@ def stimulus_cross_subject_mcca(argv: Sequence[str] | None = None, prog: str | N
     config = CrossSubjectMCCAConfig(
         window_center=args.window_center,
         window_size=args.window_size,
+        alignment_window_center=args.alignment_window_center,
+        alignment_window_size=args.alignment_window_size,
         baseline_window=args.baseline_window,
         feature_mode=args.feature_mode,
         normalization=args.normalization,

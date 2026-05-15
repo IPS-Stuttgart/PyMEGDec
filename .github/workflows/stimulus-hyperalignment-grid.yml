@@ -65,6 +65,16 @@ on:
         required: true
         default: "0.1"
         type: string
+      alignment_window_center:
+        description: Optional hyperalignment window center in seconds. Empty uses window_center.
+        required: false
+        default: ""
+        type: string
+      alignment_window_size:
+        description: Optional hyperalignment window size in seconds. Empty uses window_size.
+        required: false
+        default: ""
+        type: string
       baseline_window:
         description: Baseline normalization window as start,stop in seconds.
         required: true
@@ -184,6 +194,8 @@ jobs:
       OUTER_PARTICIPANTS: ${{ inputs.outer_participants }}
       WINDOW_CENTER: ${{ inputs.window_center }}
       WINDOW_SIZE: ${{ inputs.window_size }}
+      ALIGNMENT_WINDOW_CENTER: ${{ inputs.alignment_window_center }}
+      ALIGNMENT_WINDOW_SIZE: ${{ inputs.alignment_window_size }}
       BASELINE_WINDOW: ${{ inputs.baseline_window }}
       FEATURE_MODE: ${{ inputs.feature_mode }}
       NORMALIZATION: ${{ inputs.normalization }}
@@ -283,6 +295,12 @@ jobs:
           if [[ -n "${MAX_TRIALS_PER_CLASS_PER_PARTICIPANT}" ]]; then
             args+=(--max-trials-per-class-per-participant "${MAX_TRIALS_PER_CLASS_PER_PARTICIPANT}")
           fi
+          if [[ -n "${ALIGNMENT_WINDOW_CENTER}" ]]; then
+            args+=(--alignment-window-center "${ALIGNMENT_WINDOW_CENTER}")
+          fi
+          if [[ -n "${ALIGNMENT_WINDOW_SIZE}" ]]; then
+            args+=(--alignment-window-size "${ALIGNMENT_WINDOW_SIZE}")
+          fi
           printf 'Running variant %s\n' "${VARIANT}"
           printf 'Command:'
           printf ' %q' "${args[@]}"
@@ -326,6 +344,7 @@ jobs:
                       f"| hyperalignment components | {row.get('hyperalignment_requested_components', '')} |",
                       f"| iterations | {row.get('hyperalignment_iterations', '')} |",
                       f"| initialization | {row.get('hyperalignment_initialization', '')} |",
+                      f"| alignment window | {row.get('alignment_window_start_s', '')} to {row.get('alignment_window_stop_s', '')} s |",
                       f"| folds | {row.get('n_outer_folds', '')} |",
                       f"| chance | {value('chance_percent', suffix='%')} |",
                       f"| balanced accuracy | {value('balanced_percent_mean', suffix='%')} |",
@@ -394,6 +413,10 @@ jobs:
               "hyperalignment_iterations",
               "hyperalignment_initialization",
               "hyperalignment_actual_component_counts",
+              "alignment_window_center_s",
+              "alignment_window_size_s",
+              "alignment_window_start_s",
+              "alignment_window_stop_s",
               "n_outer_folds",
               "chance_percent",
               "balanced_percent_mean",

@@ -63,6 +63,32 @@ def test_cross_subject_mcca_exports_full_loso_artifacts():
     assert all("true_label_rank" in row for row in artifacts["predictions"])
 
 
+def test_cross_subject_mcca_can_use_separate_alignment_window():
+    config = CrossSubjectMCCAConfig(
+        window_center=0.2,
+        window_size=0.1,
+        alignment_window_center=0.05,
+        alignment_window_size=0.3,
+        feature_mode="sensor_flat",
+        normalization="none",
+        classifier="correlation-prototype",
+        components_pca=float("inf"),
+        mcca_components=2,
+        mcca_sample_mode="class_repetition",
+        chance_classes=2,
+        signflip_permutations=32,
+    )
+    with patch("pymegdec.stimulus_cross_subject.sio.loadmat", side_effect=_loadmat_side_effect(_toy_data_by_participant())):
+        artifacts = evaluate_cross_subject_mcca("unused", [1, 2, 3, 4], config=config)
+    assert len(artifacts["outer"]) == 4
+    first_outer = artifacts["outer"][0]
+    assert first_outer["window_center_s"] == 0.2
+    assert first_outer["alignment_window_center_s"] == 0.05
+    assert first_outer["window_size_s"] == 0.1
+    assert first_outer["alignment_window_size_s"] == 0.3
+    assert all(row["alignment_window_center_s"] == 0.05 for row in artifacts["predictions"])
+
+
 def test_cross_subject_hyperalignment_exports_full_loso_artifacts():
     config = CrossSubjectHyperalignmentConfig(
         window_center=0.2,
@@ -89,6 +115,32 @@ def test_cross_subject_hyperalignment_exports_full_loso_artifacts():
     assert all("true_label_rank" in row and "score_class_1" in row for row in artifacts["predictions"])
     assert "top2_accuracy_mean" in artifacts["group_summary"][0]
     assert "mean_true_label_rank_mean" in artifacts["group_summary"][0]
+
+
+def test_cross_subject_hyperalignment_can_use_separate_alignment_window():
+    config = CrossSubjectHyperalignmentConfig(
+        window_center=0.2,
+        window_size=0.1,
+        alignment_window_center=0.05,
+        alignment_window_size=0.3,
+        feature_mode="sensor_flat",
+        normalization="none",
+        classifier="correlation-prototype",
+        components_pca=float("inf"),
+        hyperalignment_components=2,
+        hyperalignment_sample_mode="class_repetition",
+        chance_classes=2,
+        signflip_permutations=32,
+    )
+    with patch("pymegdec.stimulus_cross_subject.sio.loadmat", side_effect=_loadmat_side_effect(_toy_data_by_participant())):
+        artifacts = evaluate_cross_subject_hyperalignment("unused", [1, 2, 3, 4], config=config)
+    assert len(artifacts["outer"]) == 4
+    first_outer = artifacts["outer"][0]
+    assert first_outer["window_center_s"] == 0.2
+    assert first_outer["alignment_window_center_s"] == 0.05
+    assert first_outer["window_size_s"] == 0.1
+    assert first_outer["alignment_window_size_s"] == 0.3
+    assert all(row["alignment_window_center_s"] == 0.05 for row in artifacts["predictions"])
 
 
 def test_cross_subject_hyperalignment_label_shuffle_is_reproducible():

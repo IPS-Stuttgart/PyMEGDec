@@ -65,6 +65,16 @@ on:
         required: true
         default: "0.1"
         type: string
+      alignment_window_center:
+        description: Optional M-CCA alignment window center in seconds. Empty uses window_center.
+        required: false
+        default: ""
+        type: string
+      alignment_window_size:
+        description: Optional M-CCA alignment window size in seconds. Empty uses window_size.
+        required: false
+        default: ""
+        type: string
       baseline_window:
         description: Baseline normalization window as start,stop in seconds.
         required: true
@@ -184,6 +194,8 @@ jobs:
       OUTER_PARTICIPANTS: ${{ inputs.outer_participants }}
       WINDOW_CENTER: ${{ inputs.window_center }}
       WINDOW_SIZE: ${{ inputs.window_size }}
+      ALIGNMENT_WINDOW_CENTER: ${{ inputs.alignment_window_center }}
+      ALIGNMENT_WINDOW_SIZE: ${{ inputs.alignment_window_size }}
       BASELINE_WINDOW: ${{ inputs.baseline_window }}
       FEATURE_MODE: ${{ inputs.feature_mode }}
       NORMALIZATION: ${{ inputs.normalization }}
@@ -282,6 +294,12 @@ jobs:
           if [[ -n "${MAX_TRIALS_PER_CLASS_PER_PARTICIPANT}" ]]; then
             args+=(--max-trials-per-class-per-participant "${MAX_TRIALS_PER_CLASS_PER_PARTICIPANT}")
           fi
+          if [[ -n "${ALIGNMENT_WINDOW_CENTER}" ]]; then
+            args+=(--alignment-window-center "${ALIGNMENT_WINDOW_CENTER}")
+          fi
+          if [[ -n "${ALIGNMENT_WINDOW_SIZE}" ]]; then
+            args+=(--alignment-window-size "${ALIGNMENT_WINDOW_SIZE}")
+          fi
           if [[ "${MCCA_SUBJECT_PCA_COMPONENTS}" != "none" ]]; then
             args+=(--mcca-subject-pca-components "${MCCA_SUBJECT_PCA_COMPONENTS}")
           fi
@@ -328,6 +346,7 @@ jobs:
                       f"| M-CCA components | {row.get('mcca_requested_components', '')} |",
                       f"| M-CCA regularization | {row.get('mcca_regularization', '')} |",
                       f"| subject PCA components | {row.get('mcca_subject_pca_components', '') or 'none'} |",
+                      f"| alignment window | {row.get('alignment_window_start_s', '')} to {row.get('alignment_window_stop_s', '')} s |",
                       f"| folds | {row.get('n_outer_folds', '')} |",
                       f"| chance | {value('chance_percent', suffix='%')} |",
                       f"| balanced accuracy | {value('balanced_percent_mean', suffix='%')} |",
@@ -395,6 +414,10 @@ jobs:
               "mcca_requested_components",
               "mcca_regularization",
               "mcca_subject_pca_components",
+              "alignment_window_center_s",
+              "alignment_window_size_s",
+              "alignment_window_start_s",
+              "alignment_window_stop_s",
               "n_outer_folds",
               "chance_percent",
               "balanced_percent_mean",
