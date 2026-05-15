@@ -14,6 +14,8 @@ if str(SRC) not in sys.path:
 
 from pymegdec import stimulus_cross_subject as base  # noqa: E402
 from pymegdec.stimulus_cross_subject import (  # noqa: E402
+    SOURCE_SELECTION_MODES,
+    SOURCE_SELECTION_NONE,
     make_cross_subject_candidate_configs,
 )
 from pymegdec.stimulus_cross_subject_controls import (  # noqa: E402
@@ -115,6 +117,8 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--signflip-seed", type=int, default=0)
     parser.add_argument("--label-control", default="none", choices=LABEL_CONTROL_MODES)
     parser.add_argument("--label-control-seed", type=int, default=0)
+    parser.add_argument("--source-selection-mode", default=SOURCE_SELECTION_NONE, choices=SOURCE_SELECTION_MODES)
+    parser.add_argument("--source-drop-count", type=int, default=0)
     parser.add_argument("--outer-output", required=True)
     parser.add_argument("--summary-output", default=None)
     parser.add_argument("--inner-validation-output", default=None)
@@ -175,6 +179,8 @@ def main(argv: list[str] | None = None) -> int:
         outer_participants=args.outer_participants or None,
         label_control=label_control,
         label_control_seed=args.label_control_seed,
+        source_selection_mode=args.source_selection_mode,
+        source_drop_count=args.source_drop_count,
         existing_artifacts=existing,
         after_outer_fold=_write_incremental,
         progress=lambda message: print(message, flush=True),

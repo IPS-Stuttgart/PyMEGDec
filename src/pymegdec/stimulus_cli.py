@@ -33,6 +33,8 @@ from pymegdec.stimulus_cross_subject import (
     DEFAULT_CROSS_SUBJECT_WINDOW_CENTER,
     DEFAULT_CROSS_SUBJECT_WINDOW_SIZE,
     NORMALIZATION_MODES,
+    SOURCE_SELECTION_MODES,
+    SOURCE_SELECTION_NONE,
     CrossSubjectStimulusConfig,
     export_cross_subject_stimulus_smoke,
     export_nested_cross_subject_stimulus,
@@ -396,6 +398,18 @@ def _build_cross_subject_nested_parser(prog: str | None = None) -> argparse.Argu
         help="Shuffle training labels within each participant for a nested null-control benchmark.",
     )
     parser.add_argument("--label-shuffle-seed", type=int, default=0, help="Seed for the nested label-shuffle control.")
+    parser.add_argument(
+        "--source-selection-mode",
+        default=SOURCE_SELECTION_NONE,
+        choices=SOURCE_SELECTION_MODES,
+        help="Optional inner-validation source-participant strategy for the final outer refit.",
+    )
+    parser.add_argument(
+        "--source-drop-count",
+        type=int,
+        default=0,
+        help="Number of lowest inner-validation source participants to drop when --source-selection-mode=drop-worst.",
+    )
     parser.add_argument("--signflip-permutations", type=int, default=10000, help="Monte Carlo sign-flip permutations for the group summary.")
     parser.add_argument("--signflip-seed", type=int, default=0, help="Random seed for sign-flip permutations.")
     parser.add_argument("--outer-output", default="outputs/stimulus_cross_subject_nested_outer.csv", help="Untouched outer participant score CSV.")
@@ -453,6 +467,8 @@ def stimulus_cross_subject_nested(argv: Sequence[str] | None = None, prog: str |
         progress=lambda message: print(message, flush=True),
         label_shuffle_control=args.label_shuffle_control,
         label_shuffle_seed=args.label_shuffle_seed,
+        source_selection_mode=args.source_selection_mode,
+        source_drop_count=args.source_drop_count,
     )
     print(f"Wrote {len(artifacts['outer'])} untouched outer participant rows to {args.outer_output}")
     print(f"Wrote {len(artifacts['inner_validation'])} inner validation rows to {args.inner_validation_output}")

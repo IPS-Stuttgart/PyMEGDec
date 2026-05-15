@@ -116,6 +116,11 @@ on:
         required: true
         default: "0"
         type: string
+      source_selection_config:
+        description: "Source selection key=value options: mode=none|drop-worst|weight-above-chance,drop_count=0."
+        required: true
+        default: "mode=none,drop_count=0"
+        type: string
       stimulus_metadata_path:
         description: Optional repository path to a stimulus metadata CSV for confusion-category summaries.
         required: false
@@ -154,6 +159,7 @@ jobs:
       MAX_TRIALS_PER_CLASS_PER_PARTICIPANT: ${{ inputs.max_trials_per_class_per_participant }}
       LABEL_SHUFFLE_CONTROL: ${{ inputs.label_shuffle_control }}
       LABEL_SHUFFLE_SEED: ${{ inputs.label_shuffle_seed }}
+      SOURCE_SELECTION_CONFIG: ${{ inputs.source_selection_config }}
       STIMULUS_METADATA_PATH: ${{ inputs.stimulus_metadata_path }}
       CONFUSION_CATEGORY_COLUMNS: ${{ inputs.confusion_category_columns }}
       MAIN_FILE_NAMES: >-
@@ -214,6 +220,30 @@ jobs:
           if [[ "${LABEL_SHUFFLE_CONTROL}" == "true" ]]; then
             output_stem="${output_stem}_label_shuffle"
           fi
+          config_value() {
+            local config="$1"
+            local key="$2"
+            local default="$3"
+            local item trimmed
+            IFS=',' read -ra entries <<< "${config}"
+            for item in "${entries[@]}"; do
+              trimmed="$(echo "${item}" | xargs)"
+              if [[ "${trimmed}" == "${key}="* ]]; then
+                printf '%s\n' "${trimmed#*=}"
+                return 0
+              fi
+            done
+            printf '%s\n' "${default}"
+          }
+          SOURCE_SELECTION_MODE="$(config_value "${SOURCE_SELECTION_CONFIG}" mode none)"
+          SOURCE_DROP_COUNT="$(config_value "${SOURCE_SELECTION_CONFIG}" drop_count 0)"
+          normalized_source_mode="$(echo "${SOURCE_SELECTION_MODE}" | tr '[:upper:]' '[:lower:]' | tr '_' '-')"
+          if [[ "${normalized_source_mode}" != "none" ]]; then
+            output_stem="${output_stem}_${normalized_source_mode}"
+            if [[ "${normalized_source_mode}" == "drop-worst" ]]; then
+              output_stem="${output_stem}_${SOURCE_DROP_COUNT}"
+            fi
+          fi
           output_prefix="outputs/${output_stem}"
           effective_trial_cap="${MAX_TRIALS_PER_CLASS_PER_PARTICIPANT}"
           if [[ "${BENCHMARK_PRESET}" == "final-all-trials" ]]; then
@@ -221,6 +251,8 @@ jobs:
           fi
           echo "Nested benchmark preset: ${BENCHMARK_PRESET}"
           echo "Effective trial cap per class/participant: ${effective_trial_cap:-all trials}"
+          echo "Source selection mode: ${SOURCE_SELECTION_MODE}"
+          echo "Source drop count: ${SOURCE_DROP_COUNT}"
           echo "Output prefix: ${output_prefix}"
           args=(
             python scripts/export_stimulus_cross_subject_nested.py
@@ -243,6 +275,8 @@ jobs:
             --confusion-output "${output_prefix}_confusion.csv"
             --per-stimulus-output "${output_prefix}_per_stimulus.csv"
             --confusion-pairs-output "${output_prefix}_confusion_pairs.csv"
+            --source-selection-mode "${SOURCE_SELECTION_MODE}"
+            --source-drop-count "${SOURCE_DROP_COUNT}"
             --write-incremental
           )
           if [[ "${LABEL_SHUFFLE_CONTROL}" == "true" ]]; then
@@ -292,6 +326,18 @@ jobs:
               output_prefix = f"{output_prefix}_final_all_trials"
           if os.environ.get("LABEL_SHUFFLE_CONTROL") == "true":
               output_prefix = f"{output_prefix}_label_shuffle"
+          def config_value(config, key, default):
+              for item in config.split(","):
+                  item = item.strip()
+                  if item.startswith(f"{key}="):
+                      return item.split("=", 1)[1]
+              return default
+          source_mode = config_value(os.environ.get("SOURCE_SELECTION_CONFIG", ""), "mode", "none").lower().replace("_", "-")
+          source_drop_count = config_value(os.environ.get("SOURCE_SELECTION_CONFIG", ""), "drop_count", "0")
+          if source_mode != "none":
+              output_prefix = f"{output_prefix}_{source_mode}"
+              if source_mode == "drop-worst":
+                  output_prefix = f"{output_prefix}_{source_drop_count}"
           summary_path = Path("outputs") / f"{output_prefix}_group_summary.csv"
           selected_path = Path("outputs") / f"{output_prefix}_selected.csv"
           pairs_path = Path("outputs") / f"{output_prefix}_confusion_pairs.csv"
@@ -344,6 +390,10 @@ jobs:
               f"| candidates | {summary['n_candidates']} |",
               f"| label shuffle control | {summary.get('label_shuffle_control', os.environ.get('LABEL_SHUFFLE_CONTROL', 'false'))} |",
               f"| label shuffle seed | {summary.get('label_shuffle_seed', os.environ.get('LABEL_SHUFFLE_SEED', ''))} |",
+              f"| source selection mode | {summary.get('source_selection_mode', source_mode)} |",
+              f"| source drop count | {summary.get('source_drop_count', source_drop_count)} |",
+              f"| source weighting mode | {summary.get('source_weighting_mode', 'none')} |",
+              f"| dropped source counts | {summary.get('dropped_source_participant_counts', '')} |",
               f"| trial cap counts | {summary.get('max_trials_per_class_per_participant_counts', '')} |",
               f"| selected classifier counts | {summary.get('selected_classifier_counts', '')} |",
               f"| selected window center counts | {summary.get('selected_window_center_counts', '')} |",

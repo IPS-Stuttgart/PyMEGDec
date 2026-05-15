@@ -80,6 +80,8 @@ def evaluate_nested_cross_subject_stimulus_controlled(
     progress=None,
     existing_artifacts=None,
     after_outer_fold=None,
+    source_selection_mode=base.SOURCE_SELECTION_NONE,
+    source_drop_count=0,
 ):
     """Run nested cross-subject benchmark with optional training-label controls."""
 
@@ -105,6 +107,8 @@ def evaluate_nested_cross_subject_stimulus_controlled(
             progress=progress,
             existing_artifacts=existing_artifacts,
             after_outer_fold=_annotating_after_outer_fold,
+            source_selection_mode=source_selection_mode,
+            source_drop_count=source_drop_count,
         )
     return annotate_cross_subject_artifacts(artifacts, label_control=label_control, label_control_seed=label_control_seed)
 
@@ -120,7 +124,7 @@ def training_label_control(label_control: str, label_control_seed: int | None):
 
     original_fit = base._fit_outer_fold_model  # pylint: disable=protected-access
 
-    def _controlled_fit(train_sets, config, classifier_param, *, label_shuffle_seed=None, label_shuffle_context=()):
+    def _controlled_fit(train_sets, config, classifier_param, *, label_shuffle_seed=None, label_shuffle_context=(), participant_weights=None):
         controlled_sets = controlled_training_sets(train_sets, label_control=label_control, label_control_seed=label_control_seed)
         return original_fit(
             controlled_sets,
@@ -128,6 +132,7 @@ def training_label_control(label_control: str, label_control_seed: int | None):
             classifier_param,
             label_shuffle_seed=label_shuffle_seed,
             label_shuffle_context=label_shuffle_context,
+            participant_weights=participant_weights,
         )
 
     base._fit_outer_fold_model = _controlled_fit  # pylint: disable=protected-access

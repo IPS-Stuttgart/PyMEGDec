@@ -47,6 +47,14 @@ DEFAULT_CROSS_SUBJECT_CLASSIFIER = "multiclass-svm"
 DEFAULT_CROSS_SUBJECT_COMPONENTS_PCA = 64
 DEFAULT_CROSS_SUBJECT_NESTED_WINDOW_CENTERS = (0.150, 0.175, 0.200)
 DEFAULT_CROSS_SUBJECT_SELECTION_METRIC = "balanced_accuracy"
+SOURCE_SELECTION_NONE = "none"
+SOURCE_SELECTION_DROP_WORST = "drop-worst"
+SOURCE_SELECTION_WEIGHT_ABOVE_CHANCE = "weight-above-chance"
+SOURCE_SELECTION_MODES = (
+    SOURCE_SELECTION_NONE,
+    SOURCE_SELECTION_DROP_WORST,
+    SOURCE_SELECTION_WEIGHT_ABOVE_CHANCE,
+)
 FEATURE_MODES = ("sensor_mean", "sensor_flat")
 NORMALIZATION_MODES = ("none", "subject_z", "subject_trial_z", "subject_baseline_z", "subject_baseline_whiten")
 ALIGNMENT_MODES = ("none", "train_class_procrustes")
@@ -62,6 +70,9 @@ CROSS_SUBJECT_PREDICTION_GROUP_COLUMNS = (
     "max_trials_per_class_per_participant",
     "label_shuffle_control",
     "label_shuffle_seed",
+    "source_selection_mode",
+    "source_drop_count",
+    "source_weighting_mode",
 )
 STIMULUS_METADATA_ID_COLUMNS = ("stimulus", "stimulus_id", "true_stimulus", "label", "image_id")
 
@@ -165,10 +176,14 @@ def evaluate_nested_cross_subject_stimulus(
     after_outer_fold=None,
     label_shuffle_control=False,
     label_shuffle_seed=0,
+    source_selection_mode=SOURCE_SELECTION_NONE,
+    source_drop_count=0,
 ):
     """Run nested LOSO model selection and evaluate each untouched outer participant once."""
 
     candidate_configs = _normalized_candidate_configs(candidate_configs)
+    source_selection_mode = normalize_source_selection_mode(source_selection_mode)
+    source_drop_count = _normalize_source_drop_count(source_selection_mode, source_drop_count)
     data_folder = resolve_data_folder(data_folder)
     participants = tuple(int(participant) for participant in participants)
     if len(participants) < 3:
@@ -200,6 +215,8 @@ def evaluate_nested_cross_subject_stimulus(
             progress=progress,
             label_shuffle_control=label_shuffle_control,
             label_shuffle_seed=label_shuffle_seed,
+            source_selection_mode=source_selection_mode,
+            source_drop_count=source_drop_count,
         )
         inner_rows.extend(outer_inner_rows)
         outer_rows.append(outer_row)
@@ -257,6 +274,29 @@ def make_cross_subject_candidate_configs(  # pylint: disable=too-many-arguments
             components_pca_values,
         )
     )
+
+
+def normalize_source_selection_mode(value):
+    """Normalize source-participant selection mode names from CLI/workflow inputs."""
+
+    normalized = str(value or SOURCE_SELECTION_NONE).strip().lower().replace("_", "-")
+    aliases = {
+        "": SOURCE_SELECTION_NONE,
+        "none": SOURCE_SELECTION_NONE,
+        "off": SOURCE_SELECTION_NONE,
+        "false": SOURCE_SELECTION_NONE,
+        "drop": SOURCE_SELECTION_DROP_WORST,
+        "drop-worst": SOURCE_SELECTION_DROP_WORST,
+        "drop-worst-source": SOURCE_SELECTION_DROP_WORST,
+        "drop-worst-sources": SOURCE_SELECTION_DROP_WORST,
+        "weight": SOURCE_SELECTION_WEIGHT_ABOVE_CHANCE,
+        "weighted": SOURCE_SELECTION_WEIGHT_ABOVE_CHANCE,
+        "weight-above-chance": SOURCE_SELECTION_WEIGHT_ABOVE_CHANCE,
+        "weight-by-above-chance": SOURCE_SELECTION_WEIGHT_ABOVE_CHANCE,
+    }
+    if normalized not in aliases:
+        raise ValueError(f"source_selection_mode must be one of {SOURCE_SELECTION_MODES}.")
+    return aliases[normalized]
 
 
 def load_participant_stimulus_features(data_folder, participant, *, config=None):
@@ -404,6 +444,11 @@ def summarize_nested_cross_subject_stimulus(outer_rows, *, signflip_permutations
     winner_margins = _finite_metric_values(outer_rows, "selected_inner_winner_margin")
     label_shuffle_control = _single_row_value(outer_rows, "label_shuffle_control", default=False)
     label_shuffle_seed = _single_row_value(outer_rows, "label_shuffle_seed", default="")
+    source_selection_mode = _single_row_value(outer_rows, "source_selection_mode", default=SOURCE_SELECTION_NONE)
+    source_drop_count = _single_row_value(outer_rows, "source_drop_count", default=0)
+    source_weighting_mode = _single_row_value(outer_rows, "source_weighting_mode", default="none")
+    source_selected_counts = _participant_list_counts(outer_rows, "selected_source_participants")
+    source_dropped_counts = _participant_list_counts(outer_rows, "dropped_source_participants")
     return [
         {
             "n_outer_folds": len(outer_rows),
@@ -412,6 +457,11 @@ def summarize_nested_cross_subject_stimulus(outer_rows, *, signflip_permutations
             "selection_metric": DEFAULT_CROSS_SUBJECT_SELECTION_METRIC,
             "label_shuffle_control": label_shuffle_control,
             "label_shuffle_seed": label_shuffle_seed,
+            "source_selection_mode": source_selection_mode,
+            "source_drop_count": source_drop_count,
+            "source_weighting_mode": source_weighting_mode,
+            "selected_source_participant_counts": _format_counter(source_selected_counts),
+            "dropped_source_participant_counts": _format_counter(source_dropped_counts),
             "n_candidates": int(max(int(row["n_candidates"]) for row in outer_rows)),
             "selected_candidate_counts": _format_counter(selected_counts),
             "selected_classifier_counts": _format_counter(classifier_counts),
@@ -751,6 +801,8 @@ def export_nested_cross_subject_stimulus(  # pylint: disable=too-many-arguments
     progress=None,
     label_shuffle_control=False,
     label_shuffle_seed=0,
+    source_selection_mode=SOURCE_SELECTION_NONE,
+    source_drop_count=0,
 ):
     """Run nested LOSO cross-subject decoding and write compact CSV artifacts."""
 
@@ -788,6 +840,8 @@ def export_nested_cross_subject_stimulus(  # pylint: disable=too-many-arguments
         after_outer_fold=write_outputs if write_incremental else None,
         label_shuffle_control=label_shuffle_control,
         label_shuffle_seed=label_shuffle_seed,
+        source_selection_mode=source_selection_mode,
+        source_drop_count=source_drop_count,
     )
     write_outputs(artifacts)
     return artifacts
@@ -812,6 +866,15 @@ def _load_feature_cache(data_folder, participants, candidate_configs, *, progres
     return feature_cache
 
 
+def _normalize_source_drop_count(source_selection_mode, source_drop_count):
+    source_drop_count = int(source_drop_count or 0)
+    if source_drop_count < 0:
+        raise ValueError("source_drop_count must be non-negative.")
+    if source_selection_mode != SOURCE_SELECTION_DROP_WORST and source_drop_count:
+        raise ValueError("source_drop_count is only used with source_selection_mode='drop-worst'.")
+    return source_drop_count
+
+
 def _evaluate_nested_outer_fold(
     test_participant,
     participants,
@@ -822,6 +885,8 @@ def _evaluate_nested_outer_fold(
     progress=None,
     label_shuffle_control=False,
     label_shuffle_seed=0,
+    source_selection_mode=SOURCE_SELECTION_NONE,
+    source_drop_count=0,
 ):
     if progress is not None:
         progress(f"START outer_test_participant={test_participant}")
@@ -839,7 +904,15 @@ def _evaluate_nested_outer_fold(
     selected_row = _select_nested_candidate(outer_inner_rows)
     selected_config = candidate_configs[int(selected_row["selected_candidate_index"]) - 1]
     selected_feature_sets = feature_cache[_feature_cache_key(selected_config)]
-    train_sets = [selected_feature_sets[participant] for participant in outer_train_participants]
+    source_plan = _nested_source_plan(
+        outer_train_participants,
+        outer_inner_rows,
+        selected_row,
+        source_selection_mode=source_selection_mode,
+        source_drop_count=source_drop_count,
+        chance_accuracy=1.0 / selected_config.chance_classes,
+    )
+    train_sets = [selected_feature_sets[participant] for participant in source_plan["selected_participants"]]
     test_set = selected_feature_sets[test_participant]
     outer_row, participant_predictions = _evaluate_outer_fold(
         train_sets,
@@ -849,18 +922,104 @@ def _evaluate_nested_outer_fold(
         include_predictions=True,
         label_shuffle_seed=label_shuffle_seed if label_shuffle_control else None,
         label_shuffle_context=(int(test_participant), int(selected_row["selected_candidate_index"]), 0),
+        participant_weights=source_plan["participant_weights"],
     )
     _add_selected_candidate_fields(outer_row, selected_row)
+    _add_source_selection_fields(outer_row, source_plan)
     for prediction_row in participant_predictions:
         _add_selected_candidate_fields(prediction_row, selected_row)
+        _add_source_selection_fields(prediction_row, source_plan)
     if progress is not None:
         progress(
             "DONE outer_test_participant="
             f"{test_participant} selected_candidate={selected_row['selected_candidate_index']} "
             f"inner_mean={selected_row['selected_inner_balanced_accuracy_mean']:.4f} "
+            f"source_selection={source_plan['source_selection_mode']} "
             f"outer_balanced_accuracy={outer_row['balanced_accuracy']:.4f}"
         )
     return outer_row, outer_inner_rows, selected_row, participant_predictions
+
+
+def _nested_source_plan(
+    outer_train_participants,
+    inner_rows,
+    selected_row,
+    *,
+    source_selection_mode,
+    source_drop_count,
+    chance_accuracy,
+):
+    source_selection_mode = normalize_source_selection_mode(source_selection_mode)
+    selected_candidate_index = int(selected_row["selected_candidate_index"])
+    source_scores = _source_validation_scores(inner_rows, selected_candidate_index)
+    ranked_sources = sorted(
+        (int(participant) for participant in outer_train_participants),
+        key=lambda participant: (float(source_scores.get(int(participant), -np.inf)), int(participant)),
+    )
+    if source_selection_mode == SOURCE_SELECTION_DROP_WORST:
+        max_drop = max(0, len(tuple(outer_train_participants)) - 2)
+        drop_count = min(int(source_drop_count), max_drop)
+        dropped_participants = tuple(ranked_sources[:drop_count])
+        selected_participants = tuple(participant for participant in outer_train_participants if int(participant) not in dropped_participants)
+        participant_weights = None
+        source_weighting_mode = "none"
+    elif source_selection_mode == SOURCE_SELECTION_WEIGHT_ABOVE_CHANCE:
+        dropped_participants = tuple()
+        selected_participants = tuple(int(participant) for participant in outer_train_participants)
+        participant_weights = _source_weights_above_chance(selected_participants, source_scores, chance_accuracy)
+        source_weighting_mode = SOURCE_SELECTION_WEIGHT_ABOVE_CHANCE
+    else:
+        dropped_participants = tuple()
+        selected_participants = tuple(int(participant) for participant in outer_train_participants)
+        participant_weights = None
+        source_weighting_mode = "none"
+    return {
+        "source_selection_mode": source_selection_mode,
+        "source_drop_count": int(len(dropped_participants)),
+        "source_weighting_mode": source_weighting_mode,
+        "selected_participants": tuple(int(participant) for participant in selected_participants),
+        "dropped_participants": tuple(int(participant) for participant in dropped_participants),
+        "source_scores": source_scores,
+        "participant_weights": participant_weights,
+    }
+
+
+def _source_validation_scores(inner_rows, selected_candidate_index):
+    scores = {}
+    for row in inner_rows:
+        if int(row["candidate_index"]) != int(selected_candidate_index):
+            continue
+        participant = int(row["inner_validation_participant"])
+        scores[participant] = float(row["balanced_accuracy"])
+    return scores
+
+
+def _source_weights_above_chance(selected_participants, source_scores, chance_accuracy):
+    raw_weights = []
+    for participant in selected_participants:
+        score = float(source_scores.get(int(participant), chance_accuracy))
+        raw_weights.append(max(score - float(chance_accuracy), 0.0))
+    raw = np.asarray(raw_weights, dtype=float)
+    if raw.size == 0 or not np.any(raw > 0.0):
+        return {int(participant): 1.0 for participant in selected_participants}
+    raw = np.maximum(raw, 1e-6)
+    raw /= float(np.mean(raw))
+    return {int(participant): float(weight) for participant, weight in zip(selected_participants, raw)}
+
+
+def _add_source_selection_fields(row, source_plan):
+    weights = source_plan["participant_weights"] or {}
+    selected_participants = tuple(int(participant) for participant in source_plan["selected_participants"])
+    source_weight_values = [float(weights.get(participant, 1.0)) for participant in selected_participants]
+    row["source_selection_mode"] = source_plan["source_selection_mode"]
+    row["source_drop_count"] = int(source_plan["source_drop_count"])
+    row["source_weighting_mode"] = source_plan["source_weighting_mode"]
+    row["selected_source_participants"] = ",".join(str(participant) for participant in selected_participants)
+    row["dropped_source_participants"] = ",".join(str(participant) for participant in source_plan["dropped_participants"])
+    row["source_validation_scores"] = _format_float_mapping(source_plan["source_scores"])
+    row["source_weights"] = _format_float_mapping(weights)
+    row["source_weight_min"] = float(np.min(source_weight_values)) if source_weight_values else np.nan
+    row["source_weight_max"] = float(np.max(source_weight_values)) if source_weight_values else np.nan
 
 
 def _evaluate_nested_inner_rows(
@@ -952,6 +1111,16 @@ def _training_labels(feature_set, *, label_shuffle_seed=None, label_shuffle_cont
     seed_values = [int(label_shuffle_seed), *[int(value) for value in label_shuffle_context], int(feature_set.participant)]
     rng = np.random.default_rng(np.random.SeedSequence(seed_values))
     return rng.permutation(labels)
+
+
+def _training_sample_weights(train_sets, train_label_arrays, participant_weights):
+    if participant_weights is None:
+        return None
+    weights = []
+    for feature_set, labels in zip(train_sets, train_label_arrays):
+        participant_weight = float(participant_weights.get(int(feature_set.participant), 1.0))
+        weights.append(np.full(np.asarray(labels).shape[0], participant_weight, dtype=float))
+    return np.concatenate(weights)
 
 
 def _align_training_features_by_subject(feature_sets, features_by_subject, labels_by_subject, config):
@@ -1167,6 +1336,7 @@ def _evaluate_outer_fold(
     include_predictions=True,
     label_shuffle_seed=None,
     label_shuffle_context=(),
+    participant_weights=None,
 ):
     fitted_model = _fit_outer_fold_model(
         train_sets,
@@ -1174,11 +1344,20 @@ def _evaluate_outer_fold(
         classifier_param,
         label_shuffle_seed=label_shuffle_seed,
         label_shuffle_context=label_shuffle_context,
+        participant_weights=participant_weights,
     )
     return _score_outer_fold_model(fitted_model, test_set, config, include_predictions=include_predictions)
 
 
-def _fit_outer_fold_model(train_sets, config, classifier_param, *, label_shuffle_seed=None, label_shuffle_context=()):
+def _fit_outer_fold_model(
+    train_sets,
+    config,
+    classifier_param,
+    *,
+    label_shuffle_seed=None,
+    label_shuffle_context=(),
+    participant_weights=None,
+):
     train_features_by_subject = [_normalized_subject_features(feature_set, config) for feature_set in train_sets]
     train_label_arrays = [
         _training_labels(
@@ -1197,6 +1376,7 @@ def _fit_outer_fold_model(train_sets, config, classifier_param, *, label_shuffle
     train_features = np.vstack(train_features_by_subject)
     train_labels_one_based = np.concatenate(train_label_arrays)
     train_labels = train_labels_one_based - 1
+    sample_weight = _training_sample_weights(train_sets, train_label_arrays, participant_weights)
 
     train_window = _centered_window(config.window_center, config.window_size)
     model_bundle = fit_reptrace_window_model(
@@ -1208,6 +1388,7 @@ def _fit_outer_fold_model(train_sets, config, classifier_param, *, label_shuffle
             config.classifier,
             classifier_param,
             random_state=config.random_state,
+            sample_weight=sample_weight,
         ),
         components_pca=config.components_pca,
         train_window=train_window,
@@ -1223,6 +1404,7 @@ def _fit_outer_fold_model(train_sets, config, classifier_param, *, label_shuffle
         "label_shuffle_control": label_shuffle_seed is not None,
         "label_shuffle_seed": "" if label_shuffle_seed is None else int(label_shuffle_seed),
         "alignment_metadata": alignment_metadata,
+        "participant_weights": {} if participant_weights is None else {int(key): float(value) for key, value in participant_weights.items()},
     }
 
 
@@ -1719,6 +1901,20 @@ def _percent_sem_or_nan(values):
 
 def _format_counter(counter):
     return ";".join(f"{key}:{counter[key]}" for key in sorted(counter))
+
+
+def _format_float_mapping(mapping):
+    return ";".join(f"{int(key)}:{float(mapping[key]):.6g}" for key in sorted(mapping))
+
+
+def _participant_list_counts(rows, key):
+    counter: Counter[int] = Counter()
+    for row in rows:
+        for participant in str(row.get(key, "")).split(","):
+            participant = participant.strip()
+            if participant:
+                counter[int(participant)] += 1
+    return counter
 
 
 def _row_value_counts(rows, key, *, fallback_key=None, transform=str):

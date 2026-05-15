@@ -83,13 +83,24 @@ class CorrelationPrototypeClassifier:
         self.prototypes_: np.ndarray | None = None
         self.normalized_prototypes_: np.ndarray | None = None
 
-    def fit(self, features, labels):
+    def fit(self, features, labels, sample_weight=None):
         features = np.asarray(features, dtype=float)
         labels = np.asarray(labels).ravel()
         self.classes_ = np.unique(labels)
         if self.classes_.size == 0:
             raise ValueError("At least one class is required.")
-        self.prototypes_ = np.vstack([np.mean(features[labels == class_label], axis=0) for class_label in self.classes_])
+        if sample_weight is None:
+            self.prototypes_ = np.vstack([np.mean(features[labels == class_label], axis=0) for class_label in self.classes_])
+        else:
+            weights = np.asarray(sample_weight, dtype=float).ravel()
+            if weights.shape[0] != labels.shape[0]:
+                raise ValueError("sample_weight length must match labels.")
+            self.prototypes_ = np.vstack(
+                [
+                    np.average(features[labels == class_label], axis=0, weights=weights[labels == class_label])
+                    for class_label in self.classes_
+                ]
+            )
         self.normalized_prototypes_ = self._row_center_normalize(self.prototypes_)
         return self
 
@@ -168,7 +179,17 @@ def train_multiclass_classifier(
     classifier,
     classifier_param,
     random_state=None,
+    sample_weight=None,
 ):
+    if sample_weight is not None:
+        return _train_reptrace_classifier_with_sample_weight(
+            features,
+            labels,
+            classifier,
+            classifier_param,
+            random_state=random_state,
+            sample_weight=sample_weight,
+        )
     return train_reptrace_classifier(
         features,
         labels,
@@ -177,6 +198,47 @@ def train_multiclass_classifier(
         random_state=random_state,
         registry=CLASSIFIER_REGISTRY,
     )
+
+
+def _train_reptrace_classifier_with_sample_weight(
+    features,
+    labels,
+    classifier,
+    classifier_param,
+    *,
+    random_state=None,
+    sample_weight=None,
+):
+    features = np.asarray(features)
+    labels = np.asarray(labels).ravel()
+    sample_weight = np.asarray(sample_weight, dtype=float).ravel()
+    if sample_weight.shape[0] != labels.shape[0]:
+        raise ValueError("sample_weight length must match labels.")
+    try:
+        classifier_spec = CLASSIFIER_REGISTRY[classifier]
+    except KeyError as exc:
+        supported_classifiers = ", ".join(sorted(CLASSIFIER_REGISTRY))
+        raise ValueError(f"Unsupported classifier: {classifier}. Supported classifiers: {supported_classifiers}") from exc
+    if classifier_spec.fits_in_builder:
+        raise ValueError(f"classifier={classifier!r} does not support sample-weighted fitting.")
+    model = classifier_spec.builder(features, labels, classifier_param, random_state)
+    _fit_model_with_sample_weight(model, features, labels, sample_weight)
+    return model
+
+
+def _fit_model_with_sample_weight(model, features, labels, sample_weight):
+    try:
+        model.fit(features, labels, sample_weight=sample_weight)
+        return
+    except (TypeError, ValueError) as first_error:
+        if hasattr(model, "steps") and model.steps:
+            final_step_name = model.steps[-1][0]
+            try:
+                model.fit(features, labels, **{f"{final_step_name}__sample_weight": sample_weight})
+                return
+            except (TypeError, ValueError):
+                pass
+        raise ValueError(f"{model.__class__.__name__} does not support sample_weight.") from first_error
 
 
 def _train_pytorch_mlp(features, labels, classifier_param, random_state=None):

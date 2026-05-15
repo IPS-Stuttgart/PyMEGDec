@@ -465,6 +465,80 @@ class TestStimulusCrossSubject(unittest.TestCase):
         self.assertEqual(artifacts["group_summary"][0]["label_shuffle_seed"], 11)
         self.assertEqual({row["true_stimulus"] for row in artifacts["predictions"]}, {1, 2})
 
+    def test_nested_cross_subject_can_drop_worst_inner_validation_sources(self):
+        data_by_participant = {
+            1: _mat_data([1, 2, 1, 2], [-1.2, 1.2, -1.1, 1.1]),
+            2: _mat_data([1, 2, 1, 2], [-1.0, 1.0, -0.9, 0.9]),
+            3: _mat_data([1, 2, 1, 2], [-1.3, 1.3, -1.2, 1.2]),
+            4: _mat_data([1, 2, 1, 2], [1.0, -1.0, 0.9, -0.9]),
+        }
+        candidate_configs = make_cross_subject_candidate_configs(
+            window_centers=(0.175,),
+            window_size=0.1,
+            feature_modes=("sensor_mean",),
+            normalizations=("none",),
+            classifiers=("multiclass-svm",),
+            classifier_params=(0.5,),
+            components_pca_values=(float("inf"),),
+            chance_classes=2,
+            signflip_permutations=128,
+        )
+
+        with patch("pymegdec.stimulus_cross_subject.sio.loadmat", side_effect=_loadmat_side_effect(data_by_participant)):
+            artifacts = evaluate_nested_cross_subject_stimulus(
+                "unused",
+                [1, 2, 3, 4],
+                candidate_configs=candidate_configs,
+                source_selection_mode="drop-worst",
+                source_drop_count=1,
+            )
+
+        self.assertEqual({row["source_selection_mode"] for row in artifacts["outer"]}, {"drop-worst"})
+        self.assertEqual({row["source_drop_count"] for row in artifacts["outer"]}, {1})
+        self.assertEqual({row["n_train_participants"] for row in artifacts["outer"]}, {2})
+        self.assertTrue(all(row["dropped_source_participants"] for row in artifacts["outer"]))
+        self.assertIn("source_validation_scores", artifacts["outer"][0])
+        self.assertEqual(artifacts["group_summary"][0]["source_selection_mode"], "drop-worst")
+        self.assertEqual(artifacts["group_summary"][0]["source_drop_count"], 1)
+        self.assertTrue(artifacts["group_summary"][0]["dropped_source_participant_counts"])
+
+    def test_nested_cross_subject_can_weight_sources_above_chance(self):
+        data_by_participant = {
+            1: _mat_data([1, 2, 1, 2], [-1.2, 1.2, -1.1, 1.1]),
+            2: _mat_data([1, 2, 1, 2], [-1.0, 1.0, -0.9, 0.9]),
+            3: _mat_data([1, 2, 1, 2], [-1.3, 1.3, -1.2, 1.2]),
+            4: _mat_data([1, 2, 1, 2], [-1.1, 1.1, -1.0, 1.0]),
+        }
+        candidate_configs = make_cross_subject_candidate_configs(
+            window_centers=(0.175,),
+            window_size=0.1,
+            feature_modes=("sensor_mean",),
+            normalizations=("none",),
+            classifiers=("multiclass-svm",),
+            classifier_params=(0.5,),
+            components_pca_values=(float("inf"),),
+            chance_classes=2,
+            signflip_permutations=128,
+        )
+
+        with (
+            patch("pymegdec.stimulus_cross_subject.sio.loadmat", side_effect=_loadmat_side_effect(data_by_participant)),
+            patch("pymegdec.stimulus_cross_subject.train_multiclass_classifier", wraps=cross_subject.train_multiclass_classifier) as train_model,
+        ):
+            artifacts = evaluate_nested_cross_subject_stimulus(
+                "unused",
+                [1, 2, 3, 4],
+                candidate_configs=candidate_configs,
+                source_selection_mode="weight-above-chance",
+            )
+
+        weighted_calls = [call for call in train_model.call_args_list if call.kwargs.get("sample_weight") is not None]
+        self.assertTrue(weighted_calls)
+        self.assertEqual({row["source_selection_mode"] for row in artifacts["outer"]}, {"weight-above-chance"})
+        self.assertEqual({row["source_weighting_mode"] for row in artifacts["outer"]}, {"weight-above-chance"})
+        self.assertTrue(all(row["source_weights"] for row in artifacts["outer"]))
+        self.assertEqual(artifacts["group_summary"][0]["source_weighting_mode"], "weight-above-chance")
+
     def test_nested_export_resumes_existing_outer_rows(self):
         data_by_participant = {
             1: _mat_data([1, 2, 1, 2], [-1.2, 1.2, -1.1, 1.1]),
