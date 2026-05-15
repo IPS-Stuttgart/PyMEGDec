@@ -115,6 +115,56 @@ labels remain untouched, so this control should return group performance near
 confound. In the manual workflow, enable `label_shuffle_control`; artifacts are
 written as `stimulus_cross_subject_nested_label_shuffle_*.csv`.
 
+## Cross-subject shared-space alignment benchmarks
+
+Use the manual `stimulus-cross-subject-alignment-benchmarks.yml` workflow to
+compare RepTrace-backed Procrustes hyperalignment and M-CCA on the same
+`Part*Data.mat` LOSO image-identity task. This workflow is separate from the
+nested candidate-grid workflow because hyperalignment and M-CCA use dedicated
+shared-space fitting code and expose additional method-specific parameters.
+
+The grouped commands are also available locally:
+
+```bash
+pymegdec stimulus cross-subject-hyperalignment \
+  --participants 1-4,6,8,9,10,13-27 \
+  --window-center 0.175 \
+  --window-size 0.1 \
+  --feature-mode sensor_flat \
+  --normalization subject_baseline_z \
+  --classifier multiclass-svm \
+  --components-pca 64 \
+  --hyper-components 64 \
+  --target-centering target_unsupervised
+```
+
+```bash
+pymegdec stimulus cross-subject-mcca \
+  --participants 1-4,6,8,9,10,13-27 \
+  --window-center 0.175 \
+  --window-size 0.1 \
+  --feature-mode sensor_flat \
+  --normalization subject_baseline_z \
+  --classifier multiclass-svm \
+  --components-pca 64 \
+  --mcca-components 64 \
+  --mcca-regularization 1e-6 \
+  --target-centering target_unsupervised
+```
+
+The workflow default runs both `hyperalignment` and `mcca`, uses the same main
+MEG data preparation action as the nested workflow, writes method-specific
+outer-fold and group-summary CSVs, and uploads them as
+`stimulus-cross-subject-alignment-outputs`. M-CCA additionally writes trial
+predictions, confusion counts, per-stimulus recall, and confusion-pair summaries.
+
+Both methods fit the shared space from the outer-training participants. The
+default `target_unsupervised` option centers the held-out participant using its
+own unlabeled feature mean before projecting into the group space; use
+`group_mean` for a stricter target-independent centering control. Enable
+`label_shuffle_control` to check whether the shared-space pipeline returns
+near-chance performance when training labels are shuffled within participants.
+
 ## Confusion structure
 
 Use the confusion-structure export on trial prediction CSVs to check whether
