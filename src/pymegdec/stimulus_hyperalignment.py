@@ -14,11 +14,16 @@ from reptrace.decoding.hyperalignment import (
     class_alignment_matrices,
     fit_class_hyperalignment,
     fit_projection_to_hyperalignment,
-    transform_with_projection,
 )
 from reptrace.decoding.windowed import fit_window_model, predict_window_model, transform_window_features
 from sklearn.metrics import accuracy_score, balanced_accuracy_score
 
+from pymegdec.alignment_window import (
+    resolved_alignment_window,
+    transform_with_alignment_projection,
+    uses_separate_alignment_window,
+    validate_paired_feature_sets,
+)
 from pymegdec.alpha_metrics import write_alpha_metrics_csv
 from pymegdec.classifiers import get_default_classifier_param, should_use_default_classifier_param, train_multiclass_classifier
 from pymegdec.cli import normalize_argv, parse_classifier_param, parse_int_or_inf
@@ -53,6 +58,8 @@ class CrossSubjectHyperalignmentConfig:  # pylint: disable=too-many-instance-att
 
     window_center: float = DEFAULT_CROSS_SUBJECT_WINDOW_CENTER
     window_size: float = DEFAULT_CROSS_SUBJECT_WINDOW_SIZE
+    alignment_window_center: float | None = None
+    alignment_window_size: float | None = None
     baseline_window: tuple[float, float] = DEFAULT_CROSS_SUBJECT_BASELINE_WINDOW
     feature_mode: str = "sensor_flat"
     normalization: str = DEFAULT_CROSS_SUBJECT_NORMALIZATION
@@ -95,12 +102,23 @@ def evaluate_cross_subject_hyperalignment(data_folder, participants, *, config=N
     if unknown:
         raise ValueError(f"Outer participants must be part of participants: {unknown}")
 
-    feature_config = _feature_extraction_config(config)
+    feature_config = _feature_extraction_config(config, window_center=config.window_center, window_size=config.window_size)
+    alignment_window = resolved_alignment_window(config)
+    alignment_feature_config = _feature_extraction_config(config, window_center=alignment_window.center, window_size=alignment_window.size)
     feature_sets = []
+    alignment_feature_sets = []
     for participant in participants:
         if progress is not None:
             progress(f"LOAD participant={participant}")
-        feature_sets.append(load_participant_stimulus_features(data_folder, participant, config=feature_config))
+        feature_set = load_participant_stimulus_features(data_folder, participant, config=feature_config)
+        if uses_separate_alignment_window(config):
+            alignment_feature_set = load_participant_stimulus_features(data_folder, participant, config=alignment_feature_config)
+            validate_paired_feature_sets(feature_set, alignment_feature_set, participant=participant)
+        else:
+            alignment_feature_set = feature_set
+        feature_sets.append(feature_set)
+        alignment_feature_sets.append(alignment_feature_set)
+    alignment_sets_by_participant = {feature_set.participant: feature_set for feature_set in alignment_feature_sets}
 
     classifier_param = _resolved_classifier_param(config)
     outer_rows = []
@@ -110,9 +128,13 @@ def evaluate_cross_subject_hyperalignment(data_folder, participants, *, config=N
             progress(f"START outer_test_participant={test_participant}")
         train_sets = [feature_set for feature_set in feature_sets if int(feature_set.participant) != int(test_participant)]
         test_set = next(feature_set for feature_set in feature_sets if int(feature_set.participant) == int(test_participant))
+        train_alignment_sets = [alignment_sets_by_participant[feature_set.participant] for feature_set in train_sets]
+        test_alignment_set = alignment_sets_by_participant[test_set.participant]
         outer_row, participant_predictions = _evaluate_hyperalignment_outer_fold(
             train_sets,
             test_set,
+            train_alignment_sets,
+            test_alignment_set,
             config,
             classifier_param,
             label_shuffle_seed=label_shuffle_seed if label_shuffle_control else None,
@@ -203,6 +225,10 @@ def summarize_cross_subject_hyperalignment(outer_rows, *, config=None):
             "window_size_s": config.window_size,
             "window_start_s": _centered_window(config.window_center, config.window_size)[0],
             "window_stop_s": _centered_window(config.window_center, config.window_size)[1],
+            "alignment_window_center_s": resolved_alignment_window(config).center,
+            "alignment_window_size_s": resolved_alignment_window(config).size,
+            "alignment_window_start_s": resolved_alignment_window(config).start,
+            "alignment_window_stop_s": resolved_alignment_window(config).stop,
             "baseline_window_start_s": config.baseline_window[0],
             "baseline_window_stop_s": config.baseline_window[1],
             "feature_mode": config.feature_mode,
@@ -256,12 +282,17 @@ def summarize_cross_subject_hyperalignment(outer_rows, *, config=None):
 def _evaluate_hyperalignment_outer_fold(  # pylint: disable=too-many-locals
     train_sets,
     test_set,
+    train_alignment_sets,
+    test_alignment_set,
     config,
     classifier_param,
     *,
     label_shuffle_seed=None,
 ):
-    train_features_by_subject = {feature_set.participant: feature_set.features for feature_set in train_sets}
+    train_features_by_subject = {
+        feature_set.participant: alignment_feature_set.features
+        for feature_set, alignment_feature_set in zip(train_sets, train_alignment_sets, strict=True)
+    }
     train_labels_by_subject = {
         feature_set.participant: _training_labels(feature_set, label_shuffle_seed=label_shuffle_seed, context=(test_set.participant,)) for feature_set in train_sets
     }
@@ -285,15 +316,15 @@ def _evaluate_hyperalignment_outer_fold(  # pylint: disable=too-many-locals
 
     transformed_train = []
     transformed_labels = []
-    for feature_set in train_sets:
-        transformed_train.append(hyperalignment_model.transform(feature_set.participant, feature_set.features))
+    for feature_set, alignment_feature_set in zip(train_sets, train_alignment_sets, strict=True):
+        transformed_train.append(_transform_fitted_subject(hyperalignment_model, feature_set, alignment_feature_set))
         transformed_labels.append(train_labels_by_subject[feature_set.participant])
     train_matrix = np.vstack(transformed_train)
     train_labels = np.concatenate(transformed_labels)
     test_labels = np.asarray(test_set.labels, dtype=int)[score_mask]
     if config.target_calibration_trials_per_class > 0:
         target_alignment = class_alignment_matrices(
-            {test_set.participant: test_set.features[calibration_mask]},
+            {test_set.participant: test_alignment_set.features[calibration_mask]},
             {test_set.participant: np.asarray(test_set.labels, dtype=int)[calibration_mask]},
             sample_mode=config.hyperalignment_sample_mode,
             n_repetitions_per_class=class_alignment.n_repetitions_per_class,
@@ -302,11 +333,22 @@ def _evaluate_hyperalignment_outer_fold(  # pylint: disable=too-many-locals
             target_alignment.aligned_by_subject[test_set.participant],
             template=hyperalignment_model.template,
         )
-        test_matrix = transform_with_projection(test_set.features[score_mask], target_projection)
+        test_matrix = transform_with_alignment_projection(
+            test_set.features[score_mask],
+            decode_feature_set=test_set,
+            projection=target_projection.projection,
+            projection_feature_mean=target_projection.feature_mean,
+            projection_feature_set=test_alignment_set,
+        )
         target_transform = "target_calibrated"
     else:
-        target_mean = np.mean(test_set.features, axis=0) if config.target_centering == "target_unsupervised" else None
-        test_matrix = hyperalignment_model.transform_group(test_set.features[score_mask], feature_mean=target_mean)
+        test_matrix = _transform_group_subject(
+            hyperalignment_model,
+            test_set,
+            test_alignment_set,
+            config,
+            score_mask=score_mask,
+        )
         target_transform = "group_average"
 
     model_bundle = fit_window_model(
@@ -376,6 +418,7 @@ def _outer_row(  # pylint: disable=too-many-arguments
     balanced = float(balanced_accuracy_score(test_labels, predictions)) if len(test_labels) else np.nan
     chance = 1.0 / config.chance_classes
     window = _centered_window(config.window_center, config.window_size)
+    alignment_window = resolved_alignment_window(config)
     return {
         "test_participant": int(test_set.participant),
         "train_participants": ",".join(str(int(feature_set.participant)) for feature_set in train_sets),
@@ -387,6 +430,10 @@ def _outer_row(  # pylint: disable=too-many-arguments
         "window_size_s": config.window_size,
         "window_start_s": window[0],
         "window_stop_s": window[1],
+        "alignment_window_center_s": alignment_window.center,
+        "alignment_window_size_s": alignment_window.size,
+        "alignment_window_start_s": alignment_window.start,
+        "alignment_window_stop_s": alignment_window.stop,
         "baseline_window_start_s": config.baseline_window[0],
         "baseline_window_stop_s": config.baseline_window[1],
         "feature_mode": config.feature_mode,
@@ -439,6 +486,7 @@ def _prediction_rows(  # pylint: disable=too-many-arguments
 ):
     trial_indices = np.flatnonzero(score_mask)
     window = _centered_window(config.window_center, config.window_size)
+    alignment_window = resolved_alignment_window(config)
     ranks = _true_label_ranks(test_labels, class_scores, score_classes)
     rows = []
     for output_index, (trial_index, true_label, predicted_label, confidence_score) in enumerate(zip(trial_indices, test_labels, predictions, confidence_scores)):
@@ -454,6 +502,10 @@ def _prediction_rows(  # pylint: disable=too-many-arguments
             "window_size_s": config.window_size,
             "window_start_s": window[0],
             "window_stop_s": window[1],
+            "alignment_window_center_s": alignment_window.center,
+            "alignment_window_size_s": alignment_window.size,
+            "alignment_window_start_s": alignment_window.start,
+            "alignment_window_stop_s": alignment_window.stop,
             "feature_mode": config.feature_mode,
             "normalization": config.normalization,
             "alignment": _alignment_label(config),
@@ -543,10 +595,10 @@ def _training_labels(feature_set, *, label_shuffle_seed=None, context=()):
     return rng.permutation(labels)
 
 
-def _feature_extraction_config(config):
+def _feature_extraction_config(config, *, window_center, window_size):
     return CrossSubjectStimulusConfig(
-        window_center=config.window_center,
-        window_size=config.window_size,
+        window_center=window_center,
+        window_size=window_size,
         baseline_window=config.baseline_window,
         feature_mode=config.feature_mode,
         normalization=config.normalization,
@@ -569,6 +621,32 @@ def _resolved_classifier_param(config):
     return classifier_param
 
 
+def _transform_fitted_subject(model, feature_set, alignment_feature_set):
+    projection = model.projections[feature_set.participant]
+    return transform_with_alignment_projection(
+        feature_set.features,
+        decode_feature_set=feature_set,
+        projection=projection.projection,
+        projection_feature_mean=projection.feature_mean,
+        projection_feature_set=alignment_feature_set,
+    )
+
+
+def _transform_group_subject(model, feature_set, alignment_feature_set, config, *, score_mask):
+    if model.group_projection is None or model.group_feature_mean is None:
+        raise ValueError("A group hyperalignment projection is unavailable for the held-out participant.")
+    target_mean = np.mean(feature_set.features, axis=0) if config.target_centering == "target_unsupervised" else None
+    return transform_with_alignment_projection(
+        feature_set.features[score_mask],
+        decode_feature_set=feature_set,
+        projection=model.group_projection,
+        projection_feature_mean=model.group_feature_mean,
+        projection_feature_set=alignment_feature_set,
+        feature_mean=target_mean,
+        feature_mean_set=feature_set if target_mean is not None else None,
+    )
+
+
 def _normalized_hyperalignment_config(config):
     feature_mode = str(config.feature_mode).strip().lower().replace("-", "_")
     normalization = str(config.normalization).strip().lower().replace("-", "_")
@@ -586,12 +664,18 @@ def _normalized_hyperalignment_config(config):
         raise ValueError("target_calibration_trials_per_class must be non-negative.")
     if config.hyperalignment_iterations < 0:
         raise ValueError("hyperalignment_iterations must be non-negative.")
+    if float(config.window_size) <= 0:
+        raise ValueError("window_size must be positive.")
+    if resolved_alignment_window(config).size <= 0:
+        raise ValueError("alignment_window_size must be positive.")
     baseline_window = tuple(float(value) for value in config.baseline_window)
     if len(baseline_window) != 2:
         raise ValueError("baseline_window must contain exactly two values.")
     return CrossSubjectHyperalignmentConfig(
         window_center=float(config.window_center),
         window_size=float(config.window_size),
+        alignment_window_center=None if config.alignment_window_center is None else float(config.alignment_window_center),
+        alignment_window_size=None if config.alignment_window_size is None else float(config.alignment_window_size),
         baseline_window=(baseline_window[0], baseline_window[1]),
         feature_mode=feature_mode,
         normalization=normalization,
@@ -702,6 +786,8 @@ def _build_cross_subject_hyperalignment_parser(prog: str | None = None) -> argpa
     parser.add_argument("--outer-participants", default=None, help="Optional held-out participant ids to evaluate. Defaults to all participants.")
     parser.add_argument("--window-center", type=float, default=DEFAULT_CROSS_SUBJECT_WINDOW_CENTER, help="Stimulus decoding window center in seconds.")
     parser.add_argument("--window-size", type=float, default=DEFAULT_CROSS_SUBJECT_WINDOW_SIZE, help="Stimulus decoding window size in seconds.")
+    parser.add_argument("--alignment-window-center", type=float, default=None, help="Optional alignment/calibration window center in seconds. Defaults to --window-center.")
+    parser.add_argument("--alignment-window-size", type=float, default=None, help="Optional alignment/calibration window size in seconds. Defaults to --window-size.")
     parser.add_argument("--baseline-window", type=_parse_time_window, default=DEFAULT_CROSS_SUBJECT_BASELINE_WINDOW, help="Baseline window as start,stop in seconds.")
     parser.add_argument("--feature-mode", choices=FEATURE_MODES, default="sensor_flat", help="Feature extraction mode.")
     parser.add_argument("--normalization", choices=NORMALIZATION_MODES, default=DEFAULT_CROSS_SUBJECT_NORMALIZATION, help="Subject-level normalization mode.")
@@ -761,6 +847,8 @@ def stimulus_cross_subject_hyperalignment(argv: Sequence[str] | None = None, pro
     config = CrossSubjectHyperalignmentConfig(
         window_center=args.window_center,
         window_size=args.window_size,
+        alignment_window_center=args.alignment_window_center,
+        alignment_window_size=args.alignment_window_size,
         baseline_window=args.baseline_window,
         feature_mode=args.feature_mode,
         normalization=args.normalization,

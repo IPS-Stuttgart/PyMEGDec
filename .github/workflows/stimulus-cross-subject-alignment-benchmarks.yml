@@ -113,12 +113,12 @@ on:
         default: "0"
         type: string
       hyperalignment_config:
-        description: "Hyperalignment options as key=value pairs: components,iterations,sample_mode."
+        description: "Hyperalignment key=value options: components,iterations,sample_mode,alignment_window_center,alignment_window_size."
         required: true
         default: "components=64,iterations=10,sample_mode=class_repetition"
         type: string
       mcca_config:
-        description: "M-CCA options as key=value pairs: components,regularization,subject_pca_components,sample_mode."
+        description: "M-CCA key=value options: components,regularization,subject_pca_components,sample_mode,alignment_window_center,alignment_window_size."
         required: true
         default: "components=64,regularization=1e-6,subject_pca_components=,sample_mode=class_repetition"
         type: string
@@ -228,10 +228,14 @@ jobs:
           HYPER_COMPONENTS="$(config_value "${HYPERALIGNMENT_CONFIG}" components 64)"
           HYPER_ITERATIONS="$(config_value "${HYPERALIGNMENT_CONFIG}" iterations 10)"
           HYPER_SAMPLE_MODE="$(config_value "${HYPERALIGNMENT_CONFIG}" sample_mode class_repetition)"
+          HYPER_ALIGNMENT_WINDOW_CENTER="$(config_value "${HYPERALIGNMENT_CONFIG}" alignment_window_center "")"
+          HYPER_ALIGNMENT_WINDOW_SIZE="$(config_value "${HYPERALIGNMENT_CONFIG}" alignment_window_size "")"
           MCCA_COMPONENTS="$(config_value "${MCCA_CONFIG}" components 64)"
           MCCA_REGULARIZATION="$(config_value "${MCCA_CONFIG}" regularization 1e-6)"
           MCCA_SUBJECT_PCA_COMPONENTS="$(config_value "${MCCA_CONFIG}" subject_pca_components "")"
           MCCA_SAMPLE_MODE="$(config_value "${MCCA_CONFIG}" sample_mode class_repetition)"
+          MCCA_ALIGNMENT_WINDOW_CENTER="$(config_value "${MCCA_CONFIG}" alignment_window_center "")"
+          MCCA_ALIGNMENT_WINDOW_SIZE="$(config_value "${MCCA_CONFIG}" alignment_window_size "")"
           common_args=(
             --data-dir "${DATA_DIR}"
             --participants "${PARTICIPANTS}"
@@ -259,13 +263,22 @@ jobs:
 
           if [[ "${normalized_methods}" == *",hyperalignment,"* ]]; then
             echo "Running cross-subject hyperalignment benchmark"
-            pymegdec stimulus cross-subject-hyperalignment \
-              "${common_args[@]}" \
-              --hyperalignment-components "${HYPER_COMPONENTS}" \
-              --hyperalignment-iterations "${HYPER_ITERATIONS}" \
-              --hyperalignment-sample-mode "${HYPER_SAMPLE_MODE}" \
-              --outer-output outputs/stimulus_cross_subject_hyperalignment_outer.csv \
+            hyperalignment_args=(
+              pymegdec stimulus cross-subject-hyperalignment
+              "${common_args[@]}"
+              --hyperalignment-components "${HYPER_COMPONENTS}"
+              --hyperalignment-iterations "${HYPER_ITERATIONS}"
+              --hyperalignment-sample-mode "${HYPER_SAMPLE_MODE}"
+              --outer-output outputs/stimulus_cross_subject_hyperalignment_outer.csv
               --summary-output outputs/stimulus_cross_subject_hyperalignment_group_summary.csv
+            )
+            if [[ -n "${HYPER_ALIGNMENT_WINDOW_CENTER}" ]]; then
+              hyperalignment_args+=(--alignment-window-center "${HYPER_ALIGNMENT_WINDOW_CENTER}")
+            fi
+            if [[ -n "${HYPER_ALIGNMENT_WINDOW_SIZE}" ]]; then
+              hyperalignment_args+=(--alignment-window-size "${HYPER_ALIGNMENT_WINDOW_SIZE}")
+            fi
+            "${hyperalignment_args[@]}"
           fi
 
           if [[ "${normalized_methods}" == *",mcca,"* ]]; then
@@ -285,6 +298,12 @@ jobs:
             )
             if [[ -n "${MCCA_SUBJECT_PCA_COMPONENTS}" ]]; then
               mcca_args+=(--mcca-subject-pca-components "${MCCA_SUBJECT_PCA_COMPONENTS}")
+            fi
+            if [[ -n "${MCCA_ALIGNMENT_WINDOW_CENTER}" ]]; then
+              mcca_args+=(--alignment-window-center "${MCCA_ALIGNMENT_WINDOW_CENTER}")
+            fi
+            if [[ -n "${MCCA_ALIGNMENT_WINDOW_SIZE}" ]]; then
+              mcca_args+=(--alignment-window-size "${MCCA_ALIGNMENT_WINDOW_SIZE}")
             fi
             "${mcca_args[@]}"
           fi
