@@ -63,10 +63,12 @@ from pymegdec.stimulus_decoding import (
 from pymegdec._conservative_topk import apply_conservative_topk_metrics
 from pymegdec._mcca_score_matrix import apply_mcca_score_matrix
 from pymegdec._procrustes_target_alignment import apply_procrustes_target_alignment
+from pymegdec._stimulus_summary_participant_counts import apply_stimulus_summary_participant_counts
 
 apply_conservative_topk_metrics()
 apply_mcca_score_matrix()
 apply_procrustes_target_alignment()
+summarize_stimulus_decoding, summarize_stimulus_temporal_generalization = apply_stimulus_summary_participant_counts()
 
 __version__ = "0.1.0"
 
