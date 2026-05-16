@@ -1,5 +1,6 @@
 import os
 import unittest
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import numpy as np
@@ -99,6 +100,77 @@ class TestCrossValidateSingleDatasetSynthetic(unittest.TestCase):
             )
 
         self.assertEqual(accuracy, 0.5)
+
+    def test_cross_validate_single_dataset_zero_bases_labels_without_null_window(self):
+        labels = np.array([1, 2, 1, 2])
+        stimuli_features = [np.array([[index], [index + 1]], dtype=float) for index in range(len(labels))]
+        observed = {}
+
+        def fake_cross_validate_feature_decoding(features, labels_, **kwargs):
+            observed["labels"] = np.asarray(labels_).copy()
+            observed["null_features"] = kwargs["null_features"]
+            return SimpleNamespace(accuracy=0.0)
+
+        with (
+            patch(
+                "pymegdec.cross_validation.sio.loadmat",
+                return_value={"data": np.array([_mat_data(labels)], dtype=object)},
+            ),
+            patch(
+                "pymegdec.cross_validation.preprocess_features",
+                return_value=(stimuli_features, []),
+            ),
+            patch(
+                "pymegdec.cross_validation.cross_validate_feature_decoding",
+                side_effect=fake_cross_validate_feature_decoding,
+            ),
+        ):
+            cross_validate_single_dataset(
+                "unused",
+                1,
+                n_folds=2,
+                null_window_center=np.nan,
+                components_pca=float("inf"),
+            )
+
+        np.testing.assert_array_equal(observed["labels"], np.array([0, 1, 0, 1]))
+        self.assertIsNone(observed["null_features"])
+
+    def test_cross_validate_single_dataset_preserves_labels_with_null_window(self):
+        labels = np.array([1, 2, 1, 2])
+        stimuli_features = [np.array([[index], [index + 1]], dtype=float) for index in range(len(labels))]
+        null_features = [np.array([[index + 10], [index + 11]], dtype=float) for index in range(len(labels))]
+        observed = {}
+
+        def fake_cross_validate_feature_decoding(features, labels_, **kwargs):
+            observed["labels"] = np.asarray(labels_).copy()
+            observed["null_features"] = kwargs["null_features"]
+            return SimpleNamespace(accuracy=0.0)
+
+        with (
+            patch(
+                "pymegdec.cross_validation.sio.loadmat",
+                return_value={"data": np.array([_mat_data(labels)], dtype=object)},
+            ),
+            patch(
+                "pymegdec.cross_validation.preprocess_features",
+                return_value=(stimuli_features, null_features),
+            ),
+            patch(
+                "pymegdec.cross_validation.cross_validate_feature_decoding",
+                side_effect=fake_cross_validate_feature_decoding,
+            ),
+        ):
+            cross_validate_single_dataset(
+                "unused",
+                1,
+                n_folds=2,
+                null_window_center=-0.2,
+                components_pca=float("inf"),
+            )
+
+        np.testing.assert_array_equal(observed["labels"], labels)
+        self.assertIsNotNone(observed["null_features"])
 
 
 if __name__ == "__main__":
