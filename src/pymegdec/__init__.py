@@ -61,8 +61,10 @@ from pymegdec.stimulus_decoding import (
     summarize_stimulus_temporal_generalization,
 )
 from pymegdec._conservative_topk import apply_conservative_topk_metrics
+from pymegdec._procrustes_target_alignment import apply_procrustes_target_alignment
 
 apply_conservative_topk_metrics()
+apply_procrustes_target_alignment()
 
 __version__ = "0.1.0"
 
