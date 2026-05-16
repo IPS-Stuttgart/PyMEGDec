@@ -60,6 +60,9 @@ from pymegdec.stimulus_decoding import (
     summarize_stimulus_prediction_diagnostics,
     summarize_stimulus_temporal_generalization,
 )
+from pymegdec._conservative_topk import apply_conservative_topk_metrics
+
+apply_conservative_topk_metrics()
 
 __version__ = "0.1.0"
 
