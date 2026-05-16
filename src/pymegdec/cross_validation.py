@@ -33,7 +33,12 @@ def cross_validate_single_dataset(
     data_folder = resolve_data_folder(data_folder)
 
     data = sio.loadmat(f"{data_folder}/Part{participant_id}Data.mat")["data"][0]
-    labels = data["trialinfo"][0][0]
+    labels = np.asarray(data["trialinfo"][0][0]).ravel()
+    if np.isnan(null_window_center):
+        # Match evaluate_model_transfer/stimulus decoding: without null
+        # features there is no additional null class, so class labels should
+        # be zero-based for classifiers that require contiguous labels.
+        labels = labels - 1
     stimuli_features, null_features = preprocess_features(
         data,
         frequency_range,
