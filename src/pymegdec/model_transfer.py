@@ -38,13 +38,13 @@ def evaluate_model_transfer(
     train_exp_data = sio.loadmat(f"{data_folder}/Part{parts}Data.mat")["data"][0]
     val_exp_data = sio.loadmat(f"{data_folder}/Part{parts}CueData.mat")["data"][0]
 
-    labels_train_exp = train_exp_data["trialinfo"][0][0]
-    labels_val_exp = val_exp_data["trialinfo"][0][0]
+    labels_train_exp = np.array(train_exp_data["trialinfo"][0][0], copy=True)
+    labels_val_exp = np.array(val_exp_data["trialinfo"][0][0], copy=True)
     if np.isnan(null_window_center):
         # There is no null data in the validation experiment, and some
         # classifiers do not support labels starting above 0.
-        labels_train_exp -= 1
-        labels_val_exp -= 1
+        labels_train_exp = labels_train_exp - 1
+        labels_val_exp = labels_val_exp - 1
 
     train_sample_interval = np.diff(train_exp_data["time"][0][0][0][0, :2])
     val_sample_interval = np.diff(val_exp_data["time"][0][0][0][0, :2])
