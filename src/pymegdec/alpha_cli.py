@@ -182,6 +182,16 @@ def _build_alpha_reaction_time_parser(prog: str | None = None) -> argparse.Argum
         help="Zero-based trialinfo column containing RT when no CSV is supplied.",
     )
     parser.add_argument(
+        "--reaction-time-trial-base",
+        type=int,
+        choices=(0, 1),
+        default=0,
+        help=(
+            "Index base used by external reaction-time CSV trial numbers. "
+            "Use 1 for behavioral files numbered 1..N."
+        ),
+    )
+    parser.add_argument(
         "--reaction-time-scale",
         type=float,
         default=1.0,
@@ -219,6 +229,7 @@ def alpha_reaction_time(argv: Sequence[str] | None = None, prog: str | None = No
         default_participant=default_participant,
         default_dataset="cue" if args.cue else "main",
         reaction_time_scale=args.reaction_time_scale,
+        trial_index_base=args.reaction_time_trial_base,
     )
     export_config = AlphaReactionTimeExportConfig(
         reaction_times_path=args.reaction_times,
