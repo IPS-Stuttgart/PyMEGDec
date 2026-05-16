@@ -162,6 +162,60 @@ CLASSIFIER_REGISTRY = {
 }
 
 
+class _DecodedLabelClassifier:
+    """Expose original stimulus labels while fitting the wrapped model on 0-based labels."""
+
+    def __init__(self, model, classes):
+        self.model = model
+        self.classes_ = np.asarray(classes, dtype=int)
+
+    def __getattr__(self, name):
+        return getattr(self.model, name)
+
+    def predict(self, features):
+        encoded_predictions = np.asarray(self.model.predict(features), dtype=int)
+        return self._decode(encoded_predictions)
+
+    def decision_function(self, features):
+        if hasattr(self.model, "decision_function"):
+            scores = np.asarray(self.model.decision_function(features), dtype=float)
+            if scores.ndim == 1 and self.classes_.shape[0] == 2:
+                return np.column_stack((-scores, scores))
+            return scores
+        if hasattr(self.model, "forward"):
+            return self._torch_logits(features)
+        predictions = np.asarray(self.model.predict(features), dtype=int)
+        scores = np.zeros((predictions.shape[0], self.classes_.shape[0]), dtype=float)
+        for row_index, encoded_label in enumerate(predictions):
+            if 0 <= int(encoded_label) < self.classes_.shape[0]:
+                scores[row_index, int(encoded_label)] = 1.0
+        return scores
+
+    def predict_proba(self, features):
+        if not hasattr(self.model, "predict_proba"):
+            raise AttributeError(f"{self.model.__class__.__name__!r} object has no attribute 'predict_proba'")
+        return self.model.predict_proba(features)
+
+    def _decode(self, encoded_labels):
+        encoded_labels = np.asarray(encoded_labels, dtype=int)
+        if np.any(encoded_labels < 0) or np.any(encoded_labels >= self.classes_.shape[0]):
+            raise ValueError("Classifier returned an encoded label outside the fitted class range.")
+        return self.classes_[encoded_labels]
+
+    def _torch_logits(self, features):
+        try:
+            import torch
+        except ImportError as exc:
+            raise ImportError("Install PyMEGDec with the torch extra to score classifier='pytorch-mlp'.") from exc
+
+        if hasattr(self.model, "eval"):
+            self.model.eval()
+        with torch.no_grad():
+            tensor = torch.tensor(features, dtype=torch.float32)
+            logits = self.model.forward(tensor)
+        return logits.detach().cpu().numpy()
+
+
 def train_multiclass_classifier(
     features,
     labels,
@@ -169,14 +223,25 @@ def train_multiclass_classifier(
     classifier_param,
     random_state=None,
 ):
-    return train_reptrace_classifier(
+    classes, encoded_labels = _encode_classifier_labels(labels)
+    model = train_reptrace_classifier(
         features,
-        labels,
+        encoded_labels,
         classifier,
         classifier_param,
         random_state=random_state,
         registry=CLASSIFIER_REGISTRY,
     )
+    return _DecodedLabelClassifier(model, classes)
+
+
+def _encode_classifier_labels(labels):
+    labels = np.asarray(labels, dtype=int).ravel()
+    if labels.size == 0:
+        raise ValueError("At least one class label is required.")
+    classes = np.unique(labels)
+    encoded = np.searchsorted(classes, labels).astype(int, copy=False)
+    return classes, encoded
 
 
 def _train_pytorch_mlp(features, labels, classifier_param, random_state=None):
