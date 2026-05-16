@@ -1,5 +1,7 @@
 """Feature preprocessing helpers for MEG decoding data."""
 
+import copy
+
 import numpy as np
 from scipy.interpolate import interp1d
 from scipy.signal import butter, detrend, filtfilt
@@ -13,9 +15,10 @@ def preprocess_features(
     train_window_center,
     null_window_center,
 ):
-    data = filter_features(data, frequency_range[0], frequency_range[1])
+    data = _copy_preprocessing_data(data)
+    data = _filter_features_inplace(data, frequency_range[0], frequency_range[1])
     if new_framerate != float("inf"):
-        data = downsample_data(data, new_framerate)
+        data = _downsample_data_inplace(data, new_framerate)
 
     train_window = (
         train_window_center - window_size / 2,
@@ -30,6 +33,43 @@ def preprocess_features(
 
 
 def filter_features(data, low_freq, high_freq):
+    return _filter_features_inplace(_copy_preprocessing_data(data), low_freq, high_freq)
+
+
+def downsample_data(data, new_framerate):
+    return _downsample_data_inplace(_copy_preprocessing_data(data), new_framerate)
+
+
+def _copy_preprocessing_data(data):
+    """Return ``data`` with independent trial/time cell arrays.
+
+    SciPy-loaded MATLAB structs keep the trial and time cell arrays inside object
+    arrays. A shallow copy of the struct/dict alone would keep those leaf arrays
+    shared, so subsequent preprocessing could still mutate the caller's data.
+    """
+
+    try:
+        copied = data.copy()
+    except AttributeError:
+        copied = copy.copy(data)
+
+    for key in ("trial", "time"):
+        copied[key] = _copy_nested_array(data[key])
+    return copied
+
+
+def _copy_nested_array(value):
+    if isinstance(value, np.ndarray):
+        if value.dtype != object:
+            return value.copy()
+        copied = np.empty(value.shape, dtype=object)
+        for index, element in np.ndenumerate(value):
+            copied[index] = _copy_nested_array(element)
+        return copied
+    return copy.deepcopy(value)
+
+
+def _filter_features_inplace(data, low_freq, high_freq):
     if not data["time"][0][0][0].size:
         raise ValueError("Time vector is empty or not provided correctly.")
 
@@ -57,7 +97,7 @@ def filter_features(data, low_freq, high_freq):
     return data
 
 
-def downsample_data(data, new_framerate):
+def _downsample_data_inplace(data, new_framerate):
     raw_fs = round(float(1 / np.median(np.diff(data["time"][0][0][0][0]))))
     if new_framerate != raw_fs:
         first_time = data["time"][0][0][0][0]
