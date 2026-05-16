@@ -33,7 +33,7 @@ def cross_validate_single_dataset(
     data_folder = resolve_data_folder(data_folder)
 
     data = sio.loadmat(f"{data_folder}/Part{participant_id}Data.mat")["data"][0]
-    labels = np.asarray(data["trialinfo"][0][0]).ravel()
+    labels = np.asarray(data["trialinfo"][0][0], dtype=int).ravel()
     if np.isnan(null_window_center):
         # Match evaluate_model_transfer/stimulus decoding: without null
         # features there is no additional null class, so class labels should
