@@ -17,6 +17,8 @@ from scipy.spatial import Delaunay  # pylint: disable=no-name-in-module
 DEFAULT_OCCIPITAL_PATTERN = r"^M[LRZ]O"
 DEFAULT_TIME_WINDOW = (-0.4, -0.05)
 DEFAULT_FREQUENCY_RANGE = (8.0, 12.0)
+DEFAULT_SENSOR_POSITION_UNIT = "auto"
+_SENSOR_POSITION_UNIT_SCALE_TO_MM = {"m": 1000.0, "cm": 10.0, "mm": 1.0}
 
 
 @dataclass(frozen=True)
@@ -27,6 +29,7 @@ class AlphaMetricConfig:
     time_window: tuple[float, float] = DEFAULT_TIME_WINDOW
     frequency_range: tuple[float, float] = DEFAULT_FREQUENCY_RANGE
     filter_order: int = 5
+    sensor_position_unit: str = DEFAULT_SENSOR_POSITION_UNIT
 
 
 def _unwrap_singleton(value):
@@ -45,11 +48,56 @@ def _get_struct_field(value, field_name):
     raise TypeError(f"Cannot read field {field_name!r} from {type(value).__name__}.")
 
 
-def _label_to_string(label):
-    value = _unwrap_singleton(label)
+def _value_to_string(value):
+    value = _unwrap_singleton(value)
     if isinstance(value, bytes):
         return value.decode("utf-8")
+    if isinstance(value, np.ndarray):
+        array = np.asarray(value)
+        if array.dtype.kind in {"S", "U"}:
+            return "".join(
+                item.decode("utf-8") if isinstance(item, bytes) else str(item)
+                for item in array.ravel()
+            )
+        if array.dtype == object:
+            items = [_unwrap_singleton(item) for item in array.ravel()]
+            if all(isinstance(item, (bytes, str)) for item in items):
+                return "".join(
+                    item.decode("utf-8") if isinstance(item, bytes) else str(item)
+                    for item in items
+                )
     return str(value)
+
+
+def _label_to_string(label):
+    return _value_to_string(label)
+
+
+def _normalize_sensor_position_unit(unit):
+    unit_text = _value_to_string(unit).strip().lower()
+    canonical = {
+        "m": "m",
+        "meter": "m",
+        "meters": "m",
+        "metre": "m",
+        "metres": "m",
+        "cm": "cm",
+        "centimeter": "cm",
+        "centimeters": "cm",
+        "centimetre": "cm",
+        "centimetres": "cm",
+        "mm": "mm",
+        "millimeter": "mm",
+        "millimeters": "mm",
+        "millimetre": "mm",
+        "millimetres": "mm",
+    }
+    if unit_text not in canonical:
+        raise ValueError(
+            "sensor_position_unit must be 'auto', 'm', 'cm', 'mm', or a common "
+            f"spelled-out equivalent; got {unit!r}."
+        )
+    return canonical[unit_text]
 
 
 def get_channel_names(data, n_channels=None):
@@ -62,7 +110,7 @@ def get_channel_names(data, n_channels=None):
 
 
 def get_channel_positions(data, n_channels=None):
-    """Return channel positions from ``data.grad.chanpos``."""
+    """Return unscaled channel positions from ``data.grad.chanpos``."""
 
     grad = get_data_field(data, "grad")
     chanpos = _unwrap_singleton(_get_struct_field(grad, "chanpos"))
@@ -70,6 +118,41 @@ def get_channel_positions(data, n_channels=None):
     if n_channels is None:
         return positions
     return positions[:n_channels]
+
+
+def get_channel_position_unit(data):
+    """Return the unit stored in ``data.grad.unit``, or ``None`` if absent."""
+
+    try:
+        grad = get_data_field(data, "grad")
+        unit = _get_struct_field(grad, "unit")
+    except (KeyError, TypeError, ValueError):
+        return None
+
+    unit_text = _value_to_string(unit).strip()
+    if not unit_text:
+        return None
+    return _normalize_sensor_position_unit(unit_text)
+
+
+def resolve_sensor_position_unit(data, sensor_position_unit=DEFAULT_SENSOR_POSITION_UNIT):
+    """Resolve the unit for ``data.grad.chanpos``.
+
+    ``"auto"`` reads FieldTrip's ``data.grad.unit`` when present and otherwise
+    falls back to millimetres to preserve the historical PyMEGDec convention.
+    """
+
+    if sensor_position_unit is None or _value_to_string(sensor_position_unit).strip().lower() == "auto":
+        return get_channel_position_unit(data) or "mm"
+    return _normalize_sensor_position_unit(sensor_position_unit)
+
+
+def get_channel_positions_mm(data, n_channels=None, *, sensor_position_unit=DEFAULT_SENSOR_POSITION_UNIT):
+    """Return channel positions converted to millimetres."""
+
+    positions = get_channel_positions(data, n_channels)
+    unit = resolve_sensor_position_unit(data, sensor_position_unit)
+    return positions * _SENSOR_POSITION_UNIT_SCALE_TO_MM[unit]
 
 
 def select_channels(data, location_pattern=DEFAULT_OCCIPITAL_PATTERN):
@@ -192,9 +275,13 @@ def _alpha_window_and_phase(signal, time_vector, config):
     return alpha_window, np.angle(alpha_window)
 
 
-def _phase_geometry(data, channel_indices):
+def _phase_geometry(data, channel_indices, sensor_position_unit=DEFAULT_SENSOR_POSITION_UNIT):
     positions = np.take(
-        get_channel_positions(data, get_trial_signal(data, 0).shape[0]),
+        get_channel_positions_mm(
+            data,
+            get_trial_signal(data, 0).shape[0],
+            sensor_position_unit=sensor_position_unit,
+        ),
         channel_indices,
         axis=0,
     )
@@ -218,7 +305,7 @@ def compute_alpha_trial_metrics(
     time_vector = get_time_vector(data, trial_idx)
     signal = np.take(get_trial_signal(data, trial_idx), channel_indices, axis=0)
     alpha_window, phase = _alpha_window_and_phase(signal, time_vector, config)
-    edge_indices, edge_vectors, edge_pinv = _phase_geometry(data, channel_indices)
+    edge_indices, edge_vectors, edge_pinv = _phase_geometry(data, channel_indices, config.sensor_position_unit)
 
     row = {
         "participant": participant_id if participant_id is not None else "",
