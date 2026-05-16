@@ -182,6 +182,8 @@ class _DecodedLabelClassifier:
             if scores.ndim == 1 and self.classes_.shape[0] == 2:
                 return np.column_stack((-scores, scores))
             return scores
+        if hasattr(self.model, "predict_proba"):
+            return np.asarray(self.model.predict_proba(features), dtype=float)
         if hasattr(self.model, "forward"):
             return self._torch_logits(features)
         predictions = np.asarray(self.model.predict(features), dtype=int)
