@@ -15,9 +15,11 @@ from pymegdec.data_config import resolve_data_folder
 from scipy.spatial import Delaunay  # pylint: disable=no-name-in-module
 
 DEFAULT_OCCIPITAL_PATTERN = r"^M[LRZ]O"
+DEFAULT_PROJECTION_REFERENCE_PATTERN = r"^M"
 DEFAULT_TIME_WINDOW = (-0.4, -0.05)
 DEFAULT_FREQUENCY_RANGE = (8.0, 12.0)
 DEFAULT_SENSOR_POSITION_UNIT = "auto"
+DEFAULT_MIN_REFERENCE_AXIS_PROJECTION = 0.05
 _SENSOR_POSITION_UNIT_SCALE_TO_MM = {"m": 1000.0, "cm": 10.0, "mm": 1.0}
 _PROJECTION_EPSILON = 1e-12
 
@@ -31,6 +33,18 @@ class AlphaMetricConfig:
     frequency_range: tuple[float, float] = DEFAULT_FREQUENCY_RANGE
     filter_order: int = 5
     sensor_position_unit: str = DEFAULT_SENSOR_POSITION_UNIT
+    projection_reference_pattern: str | None = DEFAULT_PROJECTION_REFERENCE_PATTERN
+    min_reference_axis_projection: float = DEFAULT_MIN_REFERENCE_AXIS_PROJECTION
+
+
+@dataclass(frozen=True)
+class SensorProjection:
+    """Deterministic 2D projection basis for MEG sensor coordinates."""
+
+    center: np.ndarray
+    axes: np.ndarray
+    normal: np.ndarray | None
+    reference_projection_norms: tuple[float, ...]
 
 
 def _unwrap_singleton(value):
@@ -188,9 +202,21 @@ def _pca_plane_normal(centered):
     return vt[2]
 
 
-def _anchored_plane_axes(normal):
+def _validated_min_reference_projection(min_reference_projection):
+    value = float(min_reference_projection)
+    if not np.isfinite(value) or value < 0.0 or value >= 1.0:
+        raise ValueError("min_reference_axis_projection must be finite and in [0, 1).")
+    return max(value, _PROJECTION_EPSILON)
+
+
+def _anchored_plane_axes(
+    normal,
+    *,
+    min_reference_projection=DEFAULT_MIN_REFERENCE_AXIS_PROJECTION,
+):
     """Return deterministic in-plane axes anchored to the sensor coordinates."""
 
+    min_reference_projection = _validated_min_reference_projection(min_reference_projection)
     normal_norm = float(np.linalg.norm(normal))
     if normal_norm <= _PROJECTION_EPSILON:
         raise ValueError("Could not determine a stable sensor projection plane normal.")
@@ -200,15 +226,16 @@ def _anchored_plane_axes(normal):
     for reference in np.eye(3):
         # Project the next global coordinate axis into the PCA plane, then
         # orthogonalize it against already chosen in-plane axes.  This makes the
-        # first projected axis follow global +x when possible, and the second
-        # follow global +y when possible; if either is normal to the plane, the
-        # next coordinate axis is used instead.
+        # first projected axis follow global +x when robustly possible, and the
+        # second follow global +y when robustly possible.  Axes that are exactly
+        # or nearly normal to the fitted plane are skipped to avoid turning tiny
+        # numerical projection components into unstable projected directions.
         candidate = reference - float(np.dot(reference, normal)) * normal
         for axis in anchored_axes:
             candidate = candidate - float(np.dot(candidate, axis)) * axis
 
         candidate_norm = float(np.linalg.norm(candidate))
-        if candidate_norm <= _PROJECTION_EPSILON:
+        if candidate_norm <= min_reference_projection:
             continue
 
         candidate = candidate / candidate_norm
@@ -221,37 +248,147 @@ def _anchored_plane_axes(normal):
     raise ValueError("Could not anchor two projected axes to the sensor coordinate frame.")
 
 
+def _signed_pca_axes(centered):
+    _, _, vt = np.linalg.svd(centered, full_matrices=False)
+    axes = vt[:2].T
+    for column_index in range(axes.shape[1]):
+        axis = axes[:, column_index]
+        largest_component = int(np.argmax(np.abs(axis)))
+        if axis[largest_component] < 0:
+            axes[:, column_index] = -axis
+    return axes
+
+
+def fit_sensor_projection(
+    positions,
+    *,
+    min_reference_projection=DEFAULT_MIN_REFERENCE_AXIS_PROJECTION,
+):
+    """Fit a reusable deterministic 2D projection basis for sensor positions."""
+
+    positions = _check_positions_2d_array(positions)
+    center = np.mean(positions, axis=0)
+    centered = positions - center
+    if centered.shape[1] == 2:
+        return SensorProjection(
+            center=center,
+            axes=np.eye(2),
+            normal=None,
+            reference_projection_norms=(1.0, 1.0),
+        )
+
+    normal = _pca_plane_normal(centered)
+    if normal is None:
+        # Keep non-3D inputs deterministic by falling back to signed PCA axes.
+        # FieldTrip/CTF sensor positions are 3D, so the coordinate-anchored path
+        # below is used for normal PyMEGDec alpha analyses.
+        axes = _signed_pca_axes(centered)
+        return SensorProjection(
+            center=center,
+            axes=axes,
+            normal=None,
+            reference_projection_norms=tuple(float("nan") for _ in range(centered.shape[1])),
+        )
+
+    normal_norm = float(np.linalg.norm(normal))
+    if normal_norm <= _PROJECTION_EPSILON:
+        raise ValueError("Could not determine a stable sensor projection plane normal.")
+    normal = normal / normal_norm
+    axes = _anchored_plane_axes(normal, min_reference_projection=min_reference_projection)
+    reference_projection_norms = tuple(
+        float(np.linalg.norm(reference - float(np.dot(reference, normal)) * normal))
+        for reference in np.eye(3)
+    )
+    return SensorProjection(
+        center=center,
+        axes=axes,
+        normal=normal,
+        reference_projection_norms=reference_projection_norms,
+    )
+
+
+def apply_sensor_projection(positions, projection: SensorProjection):
+    """Apply a fitted sensor projection to positions in the same coordinate frame."""
+
+    positions = np.asarray(positions, dtype=float)
+    if positions.ndim != 2:
+        raise ValueError("positions must be a 2D array with shape (n_sensors, n_coordinates).")
+    if positions.shape[1] != projection.center.shape[0]:
+        raise ValueError("positions and projection center must have the same coordinate dimension.")
+    if not np.all(np.isfinite(positions)):
+        raise ValueError("Sensor positions must be finite.")
+    return (positions - projection.center) @ projection.axes
+
+
 def project_sensor_positions(positions):
     """Project sensor positions to a deterministic coordinate-anchored 2D plane.
 
     The projection plane is the best-fitting PCA/SVD plane through the selected
     sensors.  Unlike raw SVD coordinates, the in-plane axes are anchored to the
     original sensor coordinate frame: projected x follows global +x when
-    possible, projected y follows global +y when possible, and axes that are
-    normal to the fitted plane are skipped.  This keeps projected directions and
-    projected x/y trajectories comparable across participants and reruns.
+    robustly possible, projected y follows global +y when robustly possible,
+    and axes that are exactly or nearly normal to the fitted plane are skipped.
+    This keeps projected directions and projected x/y trajectories comparable
+    across participants and reruns.
     """
 
-    positions = _check_positions_2d_array(positions)
-    centered = positions - np.mean(positions, axis=0)
-    if centered.shape[1] == 2:
-        return centered
+    projection = fit_sensor_projection(positions)
+    return apply_sensor_projection(positions, projection)
 
-    normal = _pca_plane_normal(centered)
-    if normal is None:
-        # Keep non-3D inputs deterministic by falling back to signed PCA axes.
-        # FieldTrip/CTF sensor positions are 3D, so the coordinate-anchored path
-        # above is used for normal PyMEGDec alpha analyses.
-        _, _, vt = np.linalg.svd(centered, full_matrices=False)
-        axes = vt[:2].T
-        for column_index in range(axes.shape[1]):
-            axis = axes[:, column_index]
-            largest_component = int(np.argmax(np.abs(axis)))
-            if axis[largest_component] < 0:
-                axes[:, column_index] = -axis
-        return centered @ axes
 
-    return centered @ _anchored_plane_axes(normal)
+def _reference_positions_for_projection(
+    data,
+    all_positions,
+    selected_positions,
+    projection_reference_pattern,
+):
+    if projection_reference_pattern is None:
+        return selected_positions
+
+    reference_indices = select_channels(data, projection_reference_pattern)
+    if not reference_indices:
+        raise ValueError(
+            "No channels matched projection reference pattern: "
+            f"{projection_reference_pattern}"
+        )
+    return np.take(all_positions, reference_indices, axis=0)
+
+
+def project_channel_positions(
+    data,
+    channel_indices,
+    *,
+    sensor_position_unit=DEFAULT_SENSOR_POSITION_UNIT,
+    projection_reference_pattern=DEFAULT_PROJECTION_REFERENCE_PATTERN,
+    min_reference_axis_projection=DEFAULT_MIN_REFERENCE_AXIS_PROJECTION,
+):
+    """Return selected channel positions and their common-frame 2D projection.
+
+    By default the projection basis is fitted on all MEG channels matching
+    ``projection_reference_pattern`` and then applied to the selected analysis
+    channels.  Passing ``projection_reference_pattern=None`` preserves the older
+    behavior of fitting the projection from the selected channels only.
+    """
+
+    n_channels = get_trial_signal(data, 0).shape[0]
+    all_positions = get_channel_positions_mm(
+        data,
+        n_channels,
+        sensor_position_unit=sensor_position_unit,
+    )
+    channel_indices = np.asarray(channel_indices, dtype=int)
+    selected_positions = np.take(all_positions, channel_indices, axis=0)
+    reference_positions = _reference_positions_for_projection(
+        data,
+        all_positions,
+        selected_positions,
+        projection_reference_pattern,
+    )
+    projection = fit_sensor_projection(
+        reference_positions,
+        min_reference_projection=min_reference_axis_projection,
+    )
+    return selected_positions, apply_sensor_projection(selected_positions, projection)
 
 
 def _delaunay_edges(coords2d):
@@ -357,17 +494,14 @@ def _alpha_window_and_phase(signal, time_vector, config):
     return alpha_window, np.angle(alpha_window)
 
 
-def _phase_geometry(data, channel_indices, sensor_position_unit=DEFAULT_SENSOR_POSITION_UNIT):
-    positions = np.take(
-        get_channel_positions_mm(
-            data,
-            get_trial_signal(data, 0).shape[0],
-            sensor_position_unit=sensor_position_unit,
-        ),
+def _phase_geometry(data, channel_indices, config):
+    _, coords2d = project_channel_positions(
+        data,
         channel_indices,
-        axis=0,
+        sensor_position_unit=config.sensor_position_unit,
+        projection_reference_pattern=config.projection_reference_pattern,
+        min_reference_axis_projection=config.min_reference_axis_projection,
     )
-    coords2d = project_sensor_positions(positions)
     return _delaunay_edges(coords2d)
 
 
@@ -387,7 +521,7 @@ def compute_alpha_trial_metrics(
     time_vector = get_time_vector(data, trial_idx)
     signal = np.take(get_trial_signal(data, trial_idx), channel_indices, axis=0)
     alpha_window, phase = _alpha_window_and_phase(signal, time_vector, config)
-    edge_indices, edge_vectors, edge_pinv = _phase_geometry(data, channel_indices, config.sensor_position_unit)
+    edge_indices, edge_vectors, edge_pinv = _phase_geometry(data, channel_indices, config)
 
     row = {
         "participant": participant_id if participant_id is not None else "",
