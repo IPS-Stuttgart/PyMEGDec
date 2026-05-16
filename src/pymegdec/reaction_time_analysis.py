@@ -39,6 +39,8 @@ REACTION_TIME_FIELD_CANDIDATES = (
     "rt",
 )
 
+TRIAL_INDEX_BASE_CHOICES = (0, 1)
+
 
 class ReactionTimeUnavailableError(ValueError):
     """Raised when reaction times are not present in the available metadata."""
@@ -46,7 +48,12 @@ class ReactionTimeUnavailableError(ValueError):
 
 @dataclass(frozen=True)
 class ReactionTimeCsvConfig:
-    """Column mapping for an external reaction-time CSV."""
+    """Column mapping for an external reaction-time CSV.
+
+    ``trial_index_base`` describes the CSV's trial numbering. Alpha rows use
+    zero-based trial indices; pass ``trial_index_base=1`` for behavioral CSVs
+    numbered 1..N.
+    """
 
     participant_column: str | None = None
     trial_column: str | None = None
@@ -55,6 +62,7 @@ class ReactionTimeCsvConfig:
     default_participant: int | str | None = None
     default_dataset: str = "main"
     reaction_time_scale: float = 1.0
+    trial_index_base: int = 0
 
 
 @dataclass(frozen=True)
@@ -130,6 +138,23 @@ def _to_int(value):
     return int(float(str(value).strip()))
 
 
+def _validate_trial_index_base(trial_index_base):
+    if trial_index_base not in TRIAL_INDEX_BASE_CHOICES:
+        raise ValueError(f"trial_index_base must be one of {TRIAL_INDEX_BASE_CHOICES}, got {trial_index_base!r}.")
+    return trial_index_base
+
+
+def _normalize_csv_trial(value, trial_index_base):
+    raw_trial = _to_int(value)
+    zero_based_trial = raw_trial - _validate_trial_index_base(trial_index_base)
+    if zero_based_trial < 0:
+        raise ValueError(
+            f"CSV trial value {raw_trial!r} with trial_index_base={trial_index_base} "
+            "maps to a negative zero-based trial index."
+        )
+    return zero_based_trial
+
+
 def _column(fieldnames, explicit, candidates, *, required=True):
     if explicit:
         if explicit not in fieldnames:
@@ -150,6 +175,7 @@ def load_reaction_time_csv(path, config=None):
     """Load external reaction times and normalize key columns."""
 
     config = config or ReactionTimeCsvConfig()
+    trial_index_base = _validate_trial_index_base(config.trial_index_base)
     with Path(path).open(newline="", encoding="utf-8") as handle:
         reader = csv.DictReader(handle)
         fieldnames = reader.fieldnames or []
@@ -174,7 +200,7 @@ def load_reaction_time_csv(path, config=None):
                 {
                     "participant": _clean_id(row[participant_column] if participant_column else config.default_participant),
                     "dataset": (row[dataset_column] if dataset_column else config.default_dataset),
-                    "trial": _to_int(row[trial_column]),
+                    "trial": _normalize_csv_trial(row[trial_column], trial_index_base),
                     "reaction_time": _to_float(row[rt_column]) * config.reaction_time_scale,
                 }
             )
@@ -327,8 +353,51 @@ def _join_key(row):
     )
 
 
+def _trial_group_key(row):
+    return (
+        _clean_id(row.get("participant")),
+        str(row.get("dataset", "main")),
+    )
+
+
+def _group_trials_by_participant_dataset(rows):
+    grouped: dict[tuple[str, str], set[int]] = {}
+    for row in rows:
+        grouped.setdefault(_trial_group_key(row), set()).add(_to_int(row.get("trial")))
+    return grouped
+
+
+def _raise_if_likely_one_based_reaction_trials(alpha_rows, reaction_time_rows):
+    """Raise when RT rows look like unconverted one-based trial numbers."""
+
+    alpha_trials_by_group = _group_trials_by_participant_dataset(alpha_rows)
+    reaction_trials_by_group = _group_trials_by_participant_dataset(reaction_time_rows)
+    for participant, dataset in sorted(alpha_trials_by_group.keys() & reaction_trials_by_group.keys()):
+        alpha_trials = alpha_trials_by_group[(participant, dataset)]
+        reaction_trials = reaction_trials_by_group[(participant, dataset)]
+        if not alpha_trials or not reaction_trials:
+            continue
+
+        current_matches = len(alpha_trials & reaction_trials)
+        one_based_matches = len(alpha_trials & {trial - 1 for trial in reaction_trials})
+        max_possible_matches = min(len(alpha_trials), len(reaction_trials))
+        if one_based_matches > current_matches and one_based_matches >= max_possible_matches:
+            raise ValueError(
+                "Reaction-time trial numbers for "
+                f"participant {participant!r}, dataset {dataset!r} look one-based. "
+                "PyMEGDec joins against zero-based alpha trial indices. Pass "
+                "--reaction-time-trial-base 1, or set "
+                "ReactionTimeCsvConfig(trial_index_base=1), so the CSV trial "
+                "column is converted before joining."
+            )
+
+
 def join_alpha_reaction_times(alpha_rows, reaction_time_rows):
     """Join alpha metric rows with reaction times by participant, dataset, and trial."""
+
+    alpha_rows = list(alpha_rows)
+    reaction_time_rows = list(reaction_time_rows)
+    _raise_if_likely_one_based_reaction_trials(alpha_rows, reaction_time_rows)
 
     reaction_by_key = {}
     for row in reaction_time_rows:
