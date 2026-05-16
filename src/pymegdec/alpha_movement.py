@@ -291,8 +291,104 @@ def _finite_mean(values):
     return float(np.mean(array))
 
 
+def _summary_vector(row, fields):
+    values = np.asarray([row[field] for field in fields], dtype=float)
+    if not np.all(np.isfinite(values)):
+        return None
+    return values
+
+
+def _vector_norm_delta(current, reference):
+    if current is None or reference is None:
+        return np.nan
+    return float(np.linalg.norm(current - reference))
+
+
+def _speed_from_delta(current, previous, time_s, previous_time_s):
+    if current is None or previous is None:
+        return np.nan
+    dt = time_s - previous_time_s
+    if dt <= 0:
+        return np.nan
+    return float(np.linalg.norm(current - previous) / dt)
+
+
+def _projected_direction(current, previous):
+    if current is None or previous is None:
+        return np.nan
+    step = current - previous
+    if float(np.linalg.norm(step)) == 0.0:
+        return np.nan
+    return float(np.arctan2(step[1], step[0]))
+
+
+def _add_mean_trajectory_movement(summary_rows):
+    first_centroid = None
+    first_projected = None
+    previous_centroid = None
+    previous_projected = None
+    previous_centroid_time_s = np.nan
+    previous_projected_time_s = np.nan
+
+    for row in sorted(summary_rows, key=lambda item: item["time_s"]):
+        time_s = float(row["time_s"])
+        centroid = _summary_vector(row, ("centroid_x_mm", "centroid_y_mm", "centroid_z_mm"))
+        projected = _summary_vector(row, ("projected_x_mm", "projected_y_mm"))
+
+        if first_centroid is None and centroid is not None:
+            first_centroid = centroid
+        if first_projected is None and projected is not None:
+            first_projected = projected
+
+        mean_trajectory_displacement = _vector_norm_delta(centroid, first_centroid)
+        mean_trajectory_projected_displacement = _vector_norm_delta(projected, first_projected)
+        mean_trajectory_speed = _speed_from_delta(
+            centroid,
+            previous_centroid,
+            time_s,
+            previous_centroid_time_s,
+        )
+        mean_trajectory_projected_speed = _speed_from_delta(
+            projected,
+            previous_projected,
+            time_s,
+            previous_projected_time_s,
+        )
+        mean_trajectory_projected_direction = _projected_direction(projected, previous_projected)
+
+        row["mean_trajectory_displacement_mm"] = mean_trajectory_displacement
+        row["mean_trajectory_projected_displacement_mm"] = mean_trajectory_projected_displacement
+        row["mean_trajectory_speed_mm_per_s"] = mean_trajectory_speed
+        row["mean_trajectory_projected_speed_mm_per_s"] = mean_trajectory_projected_speed
+        row["mean_trajectory_projected_direction_rad"] = mean_trajectory_projected_direction
+
+        # Backwards-compatible summary column names now carry the corrected
+        # mean-trajectory semantics. The old trial-average values are exposed
+        # separately under ``mean_trial_*`` columns.
+        row["displacement_mm"] = mean_trajectory_displacement
+        row["projected_displacement_mm"] = mean_trajectory_projected_displacement
+        row["speed_mm_per_s"] = mean_trajectory_speed
+        row["projected_speed_mm_per_s"] = mean_trajectory_projected_speed
+        row["projected_direction_rad"] = mean_trajectory_projected_direction
+
+        if centroid is not None:
+            previous_centroid = centroid
+            previous_centroid_time_s = time_s
+        if projected is not None:
+            previous_projected = projected
+            previous_projected_time_s = time_s
+
+
 def summarize_alpha_movement(rows):
-    """Average sensor-level alpha movement by participant, condition, and time."""
+    """Average alpha centroids and derive movement from the averaged trajectory.
+
+    The summary row is a trajectory of the mean centroid for each participant,
+    dataset, condition, and time. Therefore ``mean_trajectory_*`` movement
+    columns, and their backwards-compatible aliases ``displacement_mm`` and
+    ``speed_mm_per_s``, are computed from that mean trajectory rather than by
+    averaging each trial's scalar displacement or speed. Trial-averaged scalar
+    movement is retained under explicit ``mean_trial_*`` columns.
+    """
 
     grouped = defaultdict(list)
     for row in rows:
@@ -304,11 +400,11 @@ def summarize_alpha_movement(rows):
         )
         grouped[key].append(row)
 
-    summary_rows = []
+    rows_by_trajectory = defaultdict(list)
     for key, group_rows in sorted(grouped.items(), key=lambda item: item[0]):
         participant, dataset, trial_label, time_s = key
         trials = {int(row["trial"]) for row in group_rows}
-        summary_rows.append(
+        rows_by_trajectory[(participant, dataset, trial_label)].append(
             {
                 "participant": participant,
                 "dataset": dataset,
@@ -322,11 +418,36 @@ def summarize_alpha_movement(rows):
                 "centroid_z_mm": _finite_mean(row["centroid_z_mm"] for row in group_rows),
                 "projected_x_mm": _finite_mean(row["projected_x_mm"] for row in group_rows),
                 "projected_y_mm": _finite_mean(row["projected_y_mm"] for row in group_rows),
-                "displacement_mm": _finite_mean(row["displacement_mm"] for row in group_rows),
-                "speed_mm_per_s": _finite_mean(row["speed_mm_per_s"] for row in group_rows),
-                "projected_speed_mm_per_s": _finite_mean(row["projected_speed_mm_per_s"] for row in group_rows),
+                "mean_trajectory_displacement_mm": np.nan,
+                "mean_trajectory_projected_displacement_mm": np.nan,
+                "mean_trajectory_speed_mm_per_s": np.nan,
+                "mean_trajectory_projected_speed_mm_per_s": np.nan,
+                "mean_trajectory_projected_direction_rad": np.nan,
+                "displacement_mm": np.nan,
+                "projected_displacement_mm": np.nan,
+                "speed_mm_per_s": np.nan,
+                "projected_speed_mm_per_s": np.nan,
+                "projected_direction_rad": np.nan,
+                "mean_trial_displacement_mm": _finite_mean(
+                    row["displacement_mm"] for row in group_rows
+                ),
+                "mean_trial_projected_displacement_mm": _finite_mean(
+                    row["projected_displacement_mm"] for row in group_rows
+                ),
+                "mean_trial_speed_mm_per_s": _finite_mean(
+                    row["speed_mm_per_s"] for row in group_rows
+                ),
+                "mean_trial_projected_speed_mm_per_s": _finite_mean(
+                    row["projected_speed_mm_per_s"] for row in group_rows
+                ),
             }
         )
+
+    summary_rows = []
+    for trajectory_key in sorted(rows_by_trajectory):
+        trajectory_rows = sorted(rows_by_trajectory[trajectory_key], key=lambda item: item["time_s"])
+        _add_mean_trajectory_movement(trajectory_rows)
+        summary_rows.extend(trajectory_rows)
     return summary_rows
 
 
