@@ -1,7 +1,4 @@
-"""Participant-count fix for stimulus decoding summaries."""
-
-# jscpd:ignore-start
-# pylint: disable=protected-access,too-many-locals
+"""Participant-aware stimulus decoding summaries."""
 
 from __future__ import annotations
 
@@ -9,8 +6,11 @@ from collections import defaultdict
 
 import numpy as np
 
-import pymegdec.stimulus_decoding as _stimulus_decoding
+import pymegdec._stimulus_decoding_core as _core
 
+
+# jscpd:ignore-start
+# pylint: disable=protected-access,too-many-locals
 
 def summarize_stimulus_decoding(rows):
     """Summarize decoding rows while counting unique participants."""
@@ -18,10 +18,10 @@ def summarize_stimulus_decoding(rows):
     if not rows:
         return []
 
-    group_fields = _stimulus_decoding._present_group_fields(rows, _stimulus_decoding.SUMMARY_GROUP_FIELDS)
-    frame = _stimulus_decoding._rows_frame(rows)
+    group_fields = _core._present_group_fields(rows, _core.SUMMARY_GROUP_FIELDS)
+    frame = _core._rows_frame(rows)
     participant_column = _participant_summary_column(rows)
-    metric_summary = _stimulus_decoding.summarize_metric_table(
+    metric_summary = _core.summarize_metric_table(
         frame,
         "accuracy",
         group_fields,
@@ -36,14 +36,14 @@ def summarize_stimulus_decoding(rows):
     for base_summary in metric_summary.to_dict("records"):
         key = tuple(base_summary.get(field, "") for field in group_fields)
         group_rows = grouped[key]
-        accuracies = [_stimulus_decoding._to_float(row["accuracy"]) for row in group_rows]
-        std = _stimulus_decoding._legacy_std(base_summary["accuracy_std"], accuracies)
-        sem = _stimulus_decoding._legacy_sem(base_summary["accuracy_sem"], accuracies)
-        permutation_p = [_stimulus_decoding._to_float(row.get("permutation_p_value")) for row in group_rows]
+        accuracies = [_core._to_float(row["accuracy"]) for row in group_rows]
+        std = _core._legacy_std(base_summary["accuracy_std"], accuracies)
+        sem = _core._legacy_sem(base_summary["accuracy_sem"], accuracies)
+        permutation_p = [_core._to_float(row.get("permutation_p_value")) for row in group_rows]
         n_with_permutation = sum(np.isfinite(permutation_p))
         significant_05 = sum(value < 0.05 for value in permutation_p if np.isfinite(value))
         significant_01 = sum(value < 0.01 for value in permutation_p if np.isfinite(value))
-        chance_accuracy = _stimulus_decoding._to_float(group_rows[0]["chance_accuracy"])
+        chance_accuracy = _core._to_float(group_rows[0]["chance_accuracy"])
         summary_row = dict(zip(group_fields, key))
         summary_row.update(
             {
@@ -73,13 +73,10 @@ def summarize_stimulus_temporal_generalization(rows):
     if not rows:
         return []
 
-    group_fields = _stimulus_decoding._present_group_fields(
-        rows,
-        _stimulus_decoding.TEMPORAL_GENERALIZATION_SUMMARY_GROUP_FIELDS,
-    )
-    frame = _stimulus_decoding._rows_frame(rows)
+    group_fields = _core._present_group_fields(rows, _core.TEMPORAL_GENERALIZATION_SUMMARY_GROUP_FIELDS)
+    frame = _core._rows_frame(rows)
     participant_column = _participant_summary_column(rows)
-    metric_summary = _stimulus_decoding.summarize_metric_table(
+    metric_summary = _core.summarize_metric_table(
         frame,
         "accuracy",
         group_fields,
@@ -94,13 +91,13 @@ def summarize_stimulus_temporal_generalization(rows):
     for base_summary in metric_summary.to_dict("records"):
         key = tuple(base_summary.get(field, "") for field in group_fields)
         group_rows = grouped[key]
-        accuracies = [_stimulus_decoding._to_float(row["accuracy"]) for row in group_rows]
-        std = _stimulus_decoding._legacy_std(base_summary["accuracy_std"], accuracies)
-        sem = _stimulus_decoding._legacy_sem(base_summary["accuracy_sem"], accuracies)
-        chance_accuracy = _stimulus_decoding._to_float(group_rows[0]["chance_accuracy"])
+        accuracies = [_core._to_float(row["accuracy"]) for row in group_rows]
+        std = _core._legacy_std(base_summary["accuracy_std"], accuracies)
+        sem = _core._legacy_sem(base_summary["accuracy_sem"], accuracies)
+        chance_accuracy = _core._to_float(group_rows[0]["chance_accuracy"])
         diagonal_values = {
-            _stimulus_decoding._window_center_key(row["train_window_center_s"])
-            == _stimulus_decoding._window_center_key(row["test_window_center_s"])
+            _core._window_center_key(row["train_window_center_s"])
+            == _core._window_center_key(row["test_window_center_s"])
             for row in group_rows
         }
         summary_row = dict(zip(group_fields, key))
@@ -122,14 +119,6 @@ def summarize_stimulus_temporal_generalization(rows):
         )
         summary_rows.append(summary_row)
     return summary_rows
-
-
-def apply_stimulus_summary_participant_counts():
-    """Install summary functions that report unique participant counts."""
-
-    _stimulus_decoding.summarize_stimulus_decoding = summarize_stimulus_decoding
-    _stimulus_decoding.summarize_stimulus_temporal_generalization = summarize_stimulus_temporal_generalization
-    return summarize_stimulus_decoding, summarize_stimulus_temporal_generalization
 
 
 def _participant_summary_column(rows):
