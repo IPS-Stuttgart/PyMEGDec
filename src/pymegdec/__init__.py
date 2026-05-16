@@ -58,8 +58,10 @@ from pymegdec.stimulus_decoding import (
     summarize_stimulus_onset_scan,
     summarize_stimulus_prediction_diagnostics,
 )
+from pymegdec._alpha_movement_common_projection import apply_alpha_movement_common_projection
 from pymegdec._stimulus_summary_participant_counts import apply_stimulus_summary_participant_counts
 
+apply_alpha_movement_common_projection()
 summarize_stimulus_decoding, summarize_stimulus_temporal_generalization = apply_stimulus_summary_participant_counts()
 
 __version__ = "0.1.0"
