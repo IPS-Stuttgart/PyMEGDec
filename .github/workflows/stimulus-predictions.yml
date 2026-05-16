@@ -331,7 +331,7 @@ jobs:
 
     steps:
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Prepare MEG data
         if: ${{ env.USE_NEXTCLOUD_DATA == 'true' }}
@@ -343,7 +343,7 @@ jobs:
           webdav-user: ${{ secrets.BUSHMEG_DATA_KEY }}
           webdav-password: ${{ secrets.BUSHMEG_DATA_PASSWORD }}
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: ${{ needs.prepare-inputs.outputs.python_version }}
 
@@ -471,7 +471,7 @@ jobs:
           cat outputs/README.md >> "${GITHUB_STEP_SUMMARY}"
 
       - name: Upload prediction outputs
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         if: always()
         with:
           name: stimulus-prediction-outputs

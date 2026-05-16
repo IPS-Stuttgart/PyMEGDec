@@ -16,7 +16,7 @@ jobs:
     timeout-minutes: 360
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Prepare MEG data
         uses: ./.github/actions/prepare-meg-data
@@ -42,7 +42,7 @@ jobs:
           test "$(find "${DATA_DIR}" -name 'Part*CueData.mat' | wc -l)" -gt 0
 
       - name: Upload data manifest
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         if: always()
         with:
           name: meg-data-manifest-${{ env.DATA_CACHE_VERSION }}
