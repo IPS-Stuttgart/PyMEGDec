@@ -108,12 +108,46 @@ def evaluate_model_transfer(
 
 
 def get_original_feature_importance(model, pca_components=None):
-    feature_importance = _get_classifier_coefficients(model)
+    feature_importance = np.asarray(_get_classifier_coefficients(model))
+    if feature_importance.ndim == 1:
+        feature_importance = feature_importance.reshape(1, -1)
+    if feature_importance.ndim != 2:
+        raise ValueError("Feature importance coefficients must be a one- or two-dimensional array.")
+
     if pca_components is not None:
-        pca_pseudoinverse = np.linalg.pinv(pca_components)
-        feature_importance = (pca_pseudoinverse.T @ feature_importance.T).T
+        feature_importance = _project_pca_feature_importance(feature_importance, pca_components)
 
     return feature_importance
+
+
+def _project_pca_feature_importance(feature_importance, pca_components):
+    """Map linear classifier coefficients from PCA coordinates to input coordinates.
+
+    The transfer helper may expose PCA loadings in either the MATLAB convention
+    ``(n_original_features, n_components)`` or the sklearn convention
+    ``(n_components, n_original_features)``.  For a linear model fitted on PCA
+    scores, the original-space coefficients are obtained by composing with the
+    same forward projection matrix; this is not a pseudoinverse operation.
+    """
+
+    pca_components = np.asarray(pca_components)
+    if pca_components.ndim != 2:
+        raise ValueError("PCA components must be a two-dimensional array.")
+
+    n_pca_features = feature_importance.shape[1]
+    if pca_components.shape[0] == n_pca_features:
+        # sklearn-style components_: scores = centered_features @ components_.T
+        return feature_importance @ pca_components
+
+    if pca_components.shape[1] == n_pca_features:
+        # MATLAB-style coeff/loadings: scores = centered_features @ coeff
+        return feature_importance @ pca_components.T
+
+    raise ValueError(
+        "PCA component shape "
+        f"{pca_components.shape} is incompatible with classifier coefficients "
+        f"of shape {feature_importance.shape}."
+    )
 
 
 def _get_classifier_coefficients(model):
