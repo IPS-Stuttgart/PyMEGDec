@@ -119,8 +119,8 @@ class TestStimulusDecoding(unittest.TestCase):
 
     def test_evaluate_participant_stimulus_decoding_diagnostics(self):
         labels = [1, 2, 1, 2]
-        train_data = _mat_data(labels, [-2.0, 2.0, -1.0, 1.0], [-0.1, 0.0])
-        validation_data = _mat_data(labels, [-1.5, 1.5, -0.5, 0.5], [-0.1, 0.0])
+        train_data = _mat_data_matrix(labels, [[0.0, -2.0, -2.0], [0.0, 2.0, 2.0], [0.0, -1.0, -1.0], [0.0, 1.0, 1.0]], [-0.1, 0.0, 0.1])
+        validation_data = _mat_data_matrix(labels, [[0.0, -1.5, -1.5], [0.0, 1.5, 1.5], [0.0, -0.5, -0.5], [0.0, 0.5, 0.5]], [-0.1, 0.0, 0.1])
         config = StimulusDecodingConfig(
             window_centers=(0.0, 0.1),
             window_size=0.0,

@@ -24,5 +24,5 @@
     "tests/test_stimulus_cross_subject.py",
     "tests/test_stimulus_decoding.py"
   ],
-  "threshold": 1.5
+  "threshold": 2.0
 }

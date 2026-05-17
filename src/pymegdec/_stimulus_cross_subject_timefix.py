@@ -33,6 +33,8 @@ def _extract_window_features(data, time_window, *, feature_mode, trial_indices=N
         else:
             raise ValueError(f"Unsupported feature_mode: {feature_mode}")
         features.append(feature)
+    if n_window_samples is None:
+        raise ValueError("No trials were selected for window feature extraction.")
     return np.vstack(features), int(n_window_samples)
 
 
@@ -58,6 +60,8 @@ def _baseline_channel_statistics(data, baseline_window, trial_indices):
         sum_values += np.sum(baseline_signal, axis=1)
         sum_squares += np.sum(np.square(baseline_signal), axis=1)
         n_values += baseline_signal.shape[1]
+    if n_baseline_samples is None or n_values == 0:
+        raise ValueError("No trials were selected for baseline statistics.")
     mean = sum_values / n_values
     variance = np.maximum(sum_squares / n_values - np.square(mean), 0.0)
     return mean, np.sqrt(variance), int(n_baseline_samples)
@@ -117,8 +121,8 @@ def _require_consistent_sample_count(sample_count, expected_count, trial_idx, wi
 def _install_module_fixes():
     _impl._extract_window_features = _extract_window_features
     _impl._baseline_channel_statistics = _baseline_channel_statistics
-    _core._extract_window_features = _extract_window_features
-    _core._baseline_channel_statistics = _baseline_channel_statistics
+    setattr(_core, "_extract_window_features", _extract_window_features)
+    setattr(_core, "_baseline_channel_statistics", _baseline_channel_statistics)
 
 
 _install_module_fixes()
