@@ -283,7 +283,7 @@ def _install_module_fixes():
     _impl.summarize_cross_subject_stimulus_smoke = summarize_cross_subject_stimulus_smoke
     _core.summarize_cross_subject_stimulus_smoke = summarize_cross_subject_stimulus_smoke
     _impl.summarize_nested_cross_subject_stimulus = summarize_nested_cross_subject_stimulus
-    _core.summarize_nested_cross_subject_stimulus = summarize_nested_cross_subject_stimulus
+    setattr(_core, "summarize_nested_cross_subject_stimulus", summarize_nested_cross_subject_stimulus)
 
 
 _install_module_fixes()

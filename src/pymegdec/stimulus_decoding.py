@@ -4,15 +4,31 @@ from __future__ import annotations
 
 from dataclasses import dataclass as _dataclass
 from dataclasses import replace as _replace
+import typing as _typing
 
 import numpy as _np
 
 import pymegdec._stimulus_decoding_core as _core
-from pymegdec._stimulus_decoding_core import *  # noqa: F403
 from pymegdec._stimulus_summary import (
     summarize_stimulus_decoding,
     summarize_stimulus_temporal_generalization,
 )
+
+DEFAULT_ONSET_SCAN_TRAIN_WINDOW_CENTER = _core.DEFAULT_ONSET_SCAN_TRAIN_WINDOW_CENTER
+DEFAULT_ONSET_SCAN_TIME_WINDOW = _core.DEFAULT_ONSET_SCAN_TIME_WINDOW
+DEFAULT_ONSET_SCAN_STEP_S = _core.DEFAULT_ONSET_SCAN_STEP_S
+DEFAULT_ONSET_THRESHOLD_WINDOW = _core.DEFAULT_ONSET_THRESHOLD_WINDOW
+DEFAULT_ONSET_THRESHOLD_QUANTILE = _core.DEFAULT_ONSET_THRESHOLD_QUANTILE
+DEFAULT_ONSET_THRESHOLD_METHOD = _core.DEFAULT_ONSET_THRESHOLD_METHOD
+DEFAULT_ONSET_MIN_CONSECUTIVE = _core.DEFAULT_ONSET_MIN_CONSECUTIVE
+DEFAULT_ONSET_MIN_DURATION = _core.DEFAULT_ONSET_MIN_DURATION
+DEFAULT_ONSET_REQUIRE_STABLE_PREDICTION = _core.DEFAULT_ONSET_REQUIRE_STABLE_PREDICTION
+window_centers_from_range = _core.window_centers_from_range
+summarize_stimulus_decoding_peaks = _core.summarize_stimulus_decoding_peaks
+summarize_stimulus_prediction_diagnostics = _core.summarize_stimulus_prediction_diagnostics
+summarize_stimulus_onset_scan = _core.summarize_stimulus_onset_scan
+summarize_stimulus_onset_events = _core.summarize_stimulus_onset_events
+write_stimulus_decoding_plots = _core.write_stimulus_decoding_plots
 
 
 @_dataclass(frozen=True)
@@ -29,7 +45,7 @@ class StimulusDecodingConfig(_core.StimulusDecodingConfig):
     including an explicit 16-class chance level.
     """
 
-    chance_classes: int | None = None
+    chance_classes: int | None = None  # type: ignore[assignment]
     infer_chance_classes: bool = True
 
 
@@ -344,7 +360,7 @@ def _row_validation_class_count(row, true_label_class_counts):
 
 
 def _true_label_class_counts(rows):
-    labels_by_group = {}
+    labels_by_group: dict[tuple[object, object, object], set[object]] = {}
     for row in rows:
         if "true_label" not in row:
             continue
@@ -381,8 +397,11 @@ def _to_float(value):
         return _np.nan
 
 
-_CORE_AUTO_CHANCE_ORIGINALS = getattr(_core, "_PYMEGDEC_AUTO_CHANCE_ORIGINALS", None)
-if _CORE_AUTO_CHANCE_ORIGINALS is None:
+_existing_core_originals = getattr(_core, "_PYMEGDEC_AUTO_CHANCE_ORIGINALS", None)
+_CORE_AUTO_CHANCE_ORIGINALS: dict[str, _typing.Any]
+if isinstance(_existing_core_originals, dict):
+    _CORE_AUTO_CHANCE_ORIGINALS = _existing_core_originals
+else:
     _CORE_AUTO_CHANCE_ORIGINALS = {
         "evaluate_time_resolved_stimulus_transfer": _core.evaluate_time_resolved_stimulus_transfer,
         "evaluate_participant_time_resolved_stimulus_transfer": _core.evaluate_participant_time_resolved_stimulus_transfer,
@@ -390,7 +409,7 @@ if _CORE_AUTO_CHANCE_ORIGINALS is None:
         "evaluate_participant_stimulus_temporal_generalization": _core.evaluate_participant_stimulus_temporal_generalization,
         "evaluate_participant_stimulus_onset_scan": _core.evaluate_participant_stimulus_onset_scan,
     }
-    _core._PYMEGDEC_AUTO_CHANCE_ORIGINALS = _CORE_AUTO_CHANCE_ORIGINALS
+    setattr(_core, "_PYMEGDEC_AUTO_CHANCE_ORIGINALS", _CORE_AUTO_CHANCE_ORIGINALS)
 
 
 def _core_evaluate_time_resolved_stimulus_transfer(data_folder, participants, *, config=None, progress=None):
@@ -493,6 +512,11 @@ def __getattr__(name):
     """Delegate private legacy helpers for compatibility with existing tests/scripts."""
 
     return getattr(_core, name)
+
+
+for _name in dir(_core):
+    if not _name.startswith("_") and _name not in globals():
+        globals()[_name] = getattr(_core, _name)
 
 
 __all__ = [name for name in globals() if not name.startswith("_")]
