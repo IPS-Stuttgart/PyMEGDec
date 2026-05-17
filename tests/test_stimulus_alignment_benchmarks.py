@@ -1,6 +1,7 @@
 from unittest.mock import patch
 
 import numpy as np
+import pytest
 
 from pymegdec.stimulus_hyperalignment import CrossSubjectHyperalignmentConfig, evaluate_cross_subject_hyperalignment
 from pymegdec.stimulus_mcca import CrossSubjectMCCAConfig, evaluate_cross_subject_mcca
@@ -145,6 +146,40 @@ def test_cross_subject_hyperalignment_exports_full_loso_artifacts():
     assert all("true_label_rank" in row and "score_class_1" in row for row in artifacts["predictions"])
     assert "top2_accuracy_mean" in artifacts["group_summary"][0]
     assert "mean_true_label_rank_mean" in artifacts["group_summary"][0]
+
+
+def test_cross_subject_hyperalignment_mean_initialization_uses_mean_path():
+    config = CrossSubjectHyperalignmentConfig(
+        window_center=0.2,
+        window_size=0.1,
+        feature_mode="sensor_mean",
+        normalization="none",
+        classifier="correlation-prototype",
+        components_pca=float("inf"),
+        hyperalignment_components=2,
+        hyperalignment_initialization="mean",
+        hyperalignment_sample_mode="class_repetition",
+        chance_classes=2,
+        signflip_permutations=32,
+    )
+
+    def fail_pca_path(*_args, **_kwargs):
+        raise AssertionError("mean initialization must not use RepTrace's PCA-default fit_class_hyperalignment path")
+
+    with patch("pymegdec._stimulus_hyperalignment_legacy.fit_class_hyperalignment", side_effect=fail_pca_path), patch(
+        "pymegdec.stimulus_cross_subject.sio.loadmat", side_effect=_loadmat_side_effect(_toy_data_by_participant())
+    ):
+        artifacts = evaluate_cross_subject_hyperalignment("unused", [1, 2, 3, 4], config=config)
+
+    assert len(artifacts["outer"]) == 4
+    assert all(row["hyperalignment_initialization"] == "mean" for row in artifacts["outer"])
+    assert all(row["hyperalignment_initialization"] == "mean" for row in artifacts["group_summary"])
+
+
+def test_cross_subject_hyperalignment_rejects_unknown_initialization():
+    config = CrossSubjectHyperalignmentConfig(hyperalignment_initialization="unsupported")
+    with pytest.raises(ValueError, match="Unsupported hyperalignment initialization"):
+        evaluate_cross_subject_hyperalignment("unused", [1, 2, 3], config=config)
 
 
 def test_cross_subject_hyperalignment_can_use_separate_alignment_window():
