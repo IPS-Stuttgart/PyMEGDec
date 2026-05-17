@@ -8,13 +8,14 @@ from dataclasses import dataclass
 import numpy as np
 from pymegdec.alpha_metrics import (
     DEFAULT_FREQUENCY_RANGE,
+    DEFAULT_MIN_REFERENCE_AXIS_PROJECTION,
+    DEFAULT_PROJECTION_REFERENCE_PATTERN,
     DEFAULT_SENSOR_POSITION_UNIT,
     compute_alpha_analytic_window,
     count_trials,
     get_channel_names,
-    get_channel_positions_mm,
     load_participant_data,
-    project_sensor_positions,
+    project_channel_positions,
     select_channels,
     write_alpha_metrics_csv,
 )
@@ -36,6 +37,8 @@ class AlphaMovementConfig:
     trajectory_step_s: float | None = DEFAULT_TRAJECTORY_STEP_S
     filter_order: int = 5
     sensor_position_unit: str = DEFAULT_SENSOR_POSITION_UNIT
+    projection_reference_pattern: str | None = DEFAULT_PROJECTION_REFERENCE_PATTERN
+    min_reference_axis_projection: float = DEFAULT_MIN_REFERENCE_AXIS_PROJECTION
 
 
 @dataclass(frozen=True)
@@ -160,18 +163,27 @@ def _movement_values(centroid, projected, first, previous, previous_time, time_s
     }
 
 
-def _selected_geometry(data, trial_signal, channel_indices, sensor_position_unit=DEFAULT_SENSOR_POSITION_UNIT):
-    positions = np.take(
-        get_channel_positions_mm(data, trial_signal.shape[0], sensor_position_unit=sensor_position_unit),
+def _selected_geometry(
+    data,
+    trial_signal,
+    channel_indices,
+    sensor_position_unit=DEFAULT_SENSOR_POSITION_UNIT,
+    projection_reference_pattern=DEFAULT_PROJECTION_REFERENCE_PATTERN,
+    min_reference_axis_projection=DEFAULT_MIN_REFERENCE_AXIS_PROJECTION,
+):
+    positions, projected_positions = project_channel_positions(
+        data,
         channel_indices,
-        axis=0,
+        sensor_position_unit=sensor_position_unit,
+        projection_reference_pattern=projection_reference_pattern,
+        min_reference_axis_projection=min_reference_axis_projection,
     )
     channel_names = np.asarray(get_channel_names(data, trial_signal.shape[0]), dtype=object)[channel_indices]
     return _MovementGeometry(
         channel_indices=channel_indices,
         channel_names=channel_names,
         positions=positions,
-        projected_positions=project_sensor_positions(positions),
+        projected_positions=projected_positions,
     )
 
 
@@ -241,7 +253,14 @@ def compute_alpha_movement_trajectory(
         sample_indices,
         config,
     )
-    geometry = _selected_geometry(data, trial_signal, channel_indices, config.sensor_position_unit)
+    geometry = _selected_geometry(
+        data,
+        trial_signal,
+        channel_indices,
+        sensor_position_unit=config.sensor_position_unit,
+        projection_reference_pattern=config.projection_reference_pattern,
+        min_reference_axis_projection=config.min_reference_axis_projection,
+    )
     context = _MovementContext(data, trial_idx, participant_id, dataset, config)
     state = _MovementState()
     return [
