@@ -4,7 +4,7 @@ build-backend = "poetry.core.masonry.api"
 
 [project]
 name = "pymegdec"
-version = "0.1.0"
+version = "0.1.1"
 description = "MEG decoding utilities for model transfer and cross-validation experiments."
 authors = [
     { name = "Florian Pfaff", email = "pfaff@ias.uni-stuttgart.de" },
