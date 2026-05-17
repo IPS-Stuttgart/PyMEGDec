@@ -1,6 +1,5 @@
 import numpy as np
 
-import pymegdec  # noqa: F401  # Import package so projection patches are applied.
 from pymegdec import alpha_movement
 
 
@@ -24,6 +23,8 @@ def _projection_data(positions, labels):
 
 
 def test_alpha_movement_uses_common_projection_reference_frame_for_subsets():
+    assert alpha_movement._selected_geometry.__module__ == "pymegdec.alpha_movement"
+
     positions = np.array(
         [
             [-20.0, 0.0, 0.0],
