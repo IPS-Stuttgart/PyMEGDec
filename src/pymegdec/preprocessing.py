@@ -4,7 +4,7 @@ import copy
 
 import numpy as np
 from scipy.interpolate import interp1d
-from scipy.signal import butter, detrend, filtfilt
+from scipy.signal import butter, filtfilt
 
 
 def preprocess_features(
@@ -107,10 +107,9 @@ def _downsample_data_inplace(data, new_framerate):
         for i in range(_trial_count(data)):
             trial, time = _trial_and_time(data, i)
             new_t = _regular_time_grid_within_support(time, step)
-            detrended = detrend(trial, axis=1)
             interpolator = interp1d(
                 time,
-                detrended,
+                trial,
                 axis=1,
                 bounds_error=True,
             )
