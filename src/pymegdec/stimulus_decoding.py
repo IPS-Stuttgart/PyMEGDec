@@ -19,14 +19,18 @@ from pymegdec._stimulus_summary import (
 class StimulusDecodingConfig(_core.StimulusDecodingConfig):
     """Stimulus-decoding config with an inferred chance level by default.
 
-    ``chance_classes=None`` means: use the number of stimulus classes actually
-    present in the evaluated validation labels.  The legacy default value
-    ``DEFAULT_CHANCE_CLASSES`` is also treated as automatic so existing CLI and
-    workflow defaults do not silently keep reporting 1/16 for subset analyses.
-    Pass any other positive integer to force an explicit chance level.
+    By default, the reported chance level uses the number of stimulus classes
+    actually present in the evaluated validation labels.  The legacy default
+    value ``DEFAULT_CHANCE_CLASSES`` is also treated as automatic while
+    ``infer_chance_classes`` is true, so existing CLI and workflow defaults do
+    not silently keep reporting 1/16 for subset analyses.
+
+    Set ``infer_chance_classes=False`` to force ``chance_classes`` exactly,
+    including an explicit 16-class chance level.
     """
 
     chance_classes: int | None = None
+    infer_chance_classes: bool = True
 
 
 def evaluate_time_resolved_stimulus_transfer(
@@ -296,12 +300,15 @@ def _onset_scan_config(config):
 def _config_for_core(config):
     config = config or StimulusDecodingConfig()
     auto_chance = _uses_auto_chance(config)
-    if auto_chance:
-        return _replace(config, chance_classes=1), True
-    return config, False
+    core_chance_classes = 1 if auto_chance else _positive_int(getattr(config, "chance_classes", None))
+    if core_chance_classes is None:
+        raise ValueError("chance_classes must be a positive integer unless chance inference is enabled.")
+    return _replace(config, chance_classes=core_chance_classes), auto_chance
 
 
 def _uses_auto_chance(config):
+    if not bool(getattr(config, "infer_chance_classes", True)):
+        return False
     chance_classes = getattr(config, "chance_classes", None)
     if chance_classes is None:
         return True
