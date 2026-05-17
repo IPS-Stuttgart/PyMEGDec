@@ -28,7 +28,11 @@ _ORIGINAL_SUMMARIZE_CROSS_SUBJECT_STIMULUS_SMOKE = _impl.summarize_cross_subject
 
 @dataclass(frozen=True)
 class CrossSubjectStimulusConfig(_BASE_CROSS_SUBJECT_CONFIG):
-    """Cross-subject stimulus config with reproducible trial-cap sampling."""
+    """Cross-subject stimulus config with reproducible trial-cap sampling.
+
+    ``train_class_procrustes`` applies only train-derived alignment parameters
+    to held-out subjects; scored target trials are not used for centering.
+    """
 
     trial_selection: str = DEFAULT_CROSS_SUBJECT_TRIAL_SELECTION
     trial_selection_seed: int | None = DEFAULT_CROSS_SUBJECT_TRIAL_SELECTION_SEED
@@ -110,14 +114,9 @@ def _fitted_alignment_model(fitted_model):
     }
 
 
-def _channel_feature_mean(features, feature_set):
-    channel_features = _impl._features_as_trial_channel_matrix(features, feature_set)
-    return np.mean(channel_features, axis=(0, 1))
-
-
-def _target_centered_channel_procrustes_transform(target_transform, features, feature_set):
+def _train_only_channel_procrustes_transform(target_transform):
     return {
-        "source_center": _channel_feature_mean(features, feature_set),
+        "source_center": np.asarray(target_transform["source_center"], dtype=float),
         "target_center": np.asarray(target_transform["target_center"], dtype=float),
         "rotation": np.asarray(target_transform["rotation"], dtype=float),
     }
@@ -137,14 +136,14 @@ def _align_test_features_by_subject(test_features, test_set, config, alignment_m
     if target_transform is None:
         return test_features, _test_alignment_metadata("none", "none")
 
-    test_transform = _target_centered_channel_procrustes_transform(
-        target_transform,
-        test_features,
-        test_set,
-    )
+    # Use only train-derived parameters. Re-centering with ``test_features``
+    # would make the held-out subject's scored feature distribution influence
+    # evaluation, which is a transductive target-alignment step rather than a
+    # strict LOSO test.
+    test_transform = _train_only_channel_procrustes_transform(target_transform)
     return (
         _impl._apply_channel_procrustes_transform(test_features, test_set, test_transform),
-        _test_alignment_metadata("group_average_train_transform", "target_unsupervised"),
+        _test_alignment_metadata("group_average_train_transform", "train_only_group_average"),
     )
 
 
@@ -520,6 +519,7 @@ def _install_module_fixes():
     _impl.summarize_cross_subject_stimulus_smoke = summarize_cross_subject_stimulus_smoke
     _impl._ranked_label_metrics = _ranked_label_metrics
     _impl._align_training_features_by_subject = _align_training_features_by_subject
+    _impl._align_test_features_by_subject = _align_test_features_by_subject  # type: ignore[attr-defined]
     _impl._score_outer_fold_model = _score_outer_fold_model
     _impl._feature_cache_key = _feature_cache_key
     _impl._prediction_rows = _prediction_rows
