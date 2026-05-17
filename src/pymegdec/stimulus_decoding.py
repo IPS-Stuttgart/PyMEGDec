@@ -381,6 +381,114 @@ def _to_float(value):
         return _np.nan
 
 
+_CORE_AUTO_CHANCE_ORIGINALS = getattr(_core, "_PYMEGDEC_AUTO_CHANCE_ORIGINALS", None)
+if _CORE_AUTO_CHANCE_ORIGINALS is None:
+    _CORE_AUTO_CHANCE_ORIGINALS = {
+        "evaluate_time_resolved_stimulus_transfer": _core.evaluate_time_resolved_stimulus_transfer,
+        "evaluate_participant_time_resolved_stimulus_transfer": _core.evaluate_participant_time_resolved_stimulus_transfer,
+        "evaluate_participant_stimulus_decoding_diagnostics": _core.evaluate_participant_stimulus_decoding_diagnostics,
+        "evaluate_participant_stimulus_temporal_generalization": _core.evaluate_participant_stimulus_temporal_generalization,
+        "evaluate_participant_stimulus_onset_scan": _core.evaluate_participant_stimulus_onset_scan,
+    }
+    _core._PYMEGDEC_AUTO_CHANCE_ORIGINALS = _CORE_AUTO_CHANCE_ORIGINALS
+
+
+def _core_evaluate_time_resolved_stimulus_transfer(data_folder, participants, *, config=None, progress=None):
+    core_config, auto_chance = _config_for_core(config)
+    rows = _CORE_AUTO_CHANCE_ORIGINALS["evaluate_time_resolved_stimulus_transfer"](
+        data_folder,
+        participants,
+        config=core_config,
+        progress=progress,
+    )
+    return _patch_auto_chance(rows) if auto_chance else rows
+
+
+def _core_evaluate_participant_time_resolved_stimulus_transfer(data_folder, participant, *, config=None):
+    core_config, auto_chance = _config_for_core(config)
+    rows = _CORE_AUTO_CHANCE_ORIGINALS["evaluate_participant_time_resolved_stimulus_transfer"](
+        data_folder,
+        participant,
+        config=core_config,
+    )
+    return _patch_auto_chance(rows) if auto_chance else rows
+
+
+def _core_evaluate_participant_stimulus_decoding_diagnostics(
+    data_folder,
+    participant,
+    *,
+    config=None,
+    diagnostic_window_centers=None,
+):
+    core_config, auto_chance = _config_for_core(config)
+    rows, prediction_rows = _CORE_AUTO_CHANCE_ORIGINALS["evaluate_participant_stimulus_decoding_diagnostics"](
+        data_folder,
+        participant,
+        config=core_config,
+        diagnostic_window_centers=diagnostic_window_centers,
+    )
+    return (_patch_auto_chance(rows) if auto_chance else rows), prediction_rows
+
+
+def _core_evaluate_participant_stimulus_temporal_generalization(data_folder, participant, *, config=None):
+    core_config, auto_chance = _config_for_core(config)
+    rows = _CORE_AUTO_CHANCE_ORIGINALS["evaluate_participant_stimulus_temporal_generalization"](
+        data_folder,
+        participant,
+        config=core_config,
+    )
+    return _patch_auto_chance(rows) if auto_chance else rows
+
+
+def _core_evaluate_participant_stimulus_onset_scan(
+    data_folder,
+    participant,
+    *,
+    config=None,
+    train_window_center=DEFAULT_ONSET_SCAN_TRAIN_WINDOW_CENTER,  # noqa: F405
+    threshold_window=DEFAULT_ONSET_THRESHOLD_WINDOW,  # noqa: F405
+    threshold_quantile=DEFAULT_ONSET_THRESHOLD_QUANTILE,  # noqa: F405
+    threshold_method=DEFAULT_ONSET_THRESHOLD_METHOD,  # noqa: F405
+    min_consecutive=DEFAULT_ONSET_MIN_CONSECUTIVE,  # noqa: F405
+    min_duration=DEFAULT_ONSET_MIN_DURATION,  # noqa: F405
+    require_stable_prediction=DEFAULT_ONSET_REQUIRE_STABLE_PREDICTION,  # noqa: F405
+    detection_start_s=None,
+):
+    config = _onset_scan_config(config)
+    core_config, auto_chance = _config_for_core(config)
+    scan_rows, event_rows = _CORE_AUTO_CHANCE_ORIGINALS["evaluate_participant_stimulus_onset_scan"](
+        data_folder,
+        participant,
+        config=core_config,
+        train_window_center=train_window_center,
+        threshold_window=threshold_window,
+        threshold_quantile=threshold_quantile,
+        threshold_method=threshold_method,
+        min_consecutive=min_consecutive,
+        min_duration=min_duration,
+        require_stable_prediction=require_stable_prediction,
+        detection_start_s=detection_start_s,
+    )
+    return (_patch_auto_chance(scan_rows) if auto_chance else scan_rows), event_rows
+
+
+def _install_core_private_import_fixes():
+    """Make direct private-core imports use the public chance-level semantics."""
+
+    _core.evaluate_time_resolved_stimulus_transfer = _core_evaluate_time_resolved_stimulus_transfer
+    _core.evaluate_participant_time_resolved_stimulus_transfer = _core_evaluate_participant_time_resolved_stimulus_transfer
+    _core.evaluate_participant_stimulus_decoding_diagnostics = _core_evaluate_participant_stimulus_decoding_diagnostics
+    _core.evaluate_participant_stimulus_temporal_generalization = _core_evaluate_participant_stimulus_temporal_generalization
+    _core.evaluate_participant_stimulus_onset_scan = _core_evaluate_participant_stimulus_onset_scan
+    _core.export_time_resolved_stimulus_decoding = export_time_resolved_stimulus_decoding
+    _core.export_stimulus_temporal_generalization = export_stimulus_temporal_generalization
+    _core.export_stimulus_onset_scan = export_stimulus_onset_scan
+
+
+_install_core_private_import_fixes()
+
+
 def __getattr__(name):
     """Delegate private legacy helpers for compatibility with existing tests/scripts."""
 
