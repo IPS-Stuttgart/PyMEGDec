@@ -2,6 +2,11 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass as _dataclass
+from dataclasses import replace as _replace
+
+import numpy as _np
+
 import pymegdec._stimulus_decoding_core as _core
 from pymegdec._stimulus_decoding_core import *  # noqa: F403
 from pymegdec._stimulus_summary import (
@@ -10,6 +15,131 @@ from pymegdec._stimulus_summary import (
 )
 
 
+@_dataclass(frozen=True)
+class StimulusDecodingConfig(_core.StimulusDecodingConfig):
+    """Stimulus-decoding config with an inferred chance level by default.
+
+    ``chance_classes=None`` means: use the number of stimulus classes actually
+    present in the evaluated validation labels.  The legacy default value
+    ``DEFAULT_CHANCE_CLASSES`` is also treated as automatic so existing CLI and
+    workflow defaults do not silently keep reporting 1/16 for subset analyses.
+    Pass any other positive integer to force an explicit chance level.
+    """
+
+    chance_classes: int | None = None
+
+
+def evaluate_time_resolved_stimulus_transfer(
+    data_folder,
+    participants,
+    *,
+    config=None,
+    progress=None,
+):
+    """Evaluate train-main/validate-cue stimulus decoding across time windows."""
+
+    core_config, auto_chance = _config_for_core(config)
+    rows = _core.evaluate_time_resolved_stimulus_transfer(
+        data_folder,
+        participants,
+        config=core_config,
+        progress=progress,
+    )
+    return _patch_auto_chance(rows) if auto_chance else rows
+
+
+def evaluate_participant_time_resolved_stimulus_transfer(
+    data_folder,
+    participant,
+    *,
+    config=None,
+):
+    """Evaluate one participant's stimulus transfer accuracy across window centers."""
+
+    core_config, auto_chance = _config_for_core(config)
+    rows = _core.evaluate_participant_time_resolved_stimulus_transfer(
+        data_folder,
+        participant,
+        config=core_config,
+    )
+    return _patch_auto_chance(rows) if auto_chance else rows
+
+
+def evaluate_participant_stimulus_decoding_diagnostics(
+    data_folder,
+    participant,
+    *,
+    config=None,
+    diagnostic_window_centers=None,
+):
+    """Evaluate one participant and return accuracy rows plus prediction diagnostics."""
+
+    core_config, auto_chance = _config_for_core(config)
+    rows, prediction_rows = _core.evaluate_participant_stimulus_decoding_diagnostics(
+        data_folder,
+        participant,
+        config=core_config,
+        diagnostic_window_centers=diagnostic_window_centers,
+    )
+    return (_patch_auto_chance(rows) if auto_chance else rows), prediction_rows
+
+
+# jscpd:ignore-start
+def evaluate_participant_stimulus_temporal_generalization(
+    data_folder,
+    participant,
+    *,
+    config=None,
+):
+    """Evaluate train-time/test-time stimulus decoding for one participant."""
+
+    core_config, auto_chance = _config_for_core(config)
+    rows = _core.evaluate_participant_stimulus_temporal_generalization(
+        data_folder,
+        participant,
+        config=core_config,
+    )
+    return _patch_auto_chance(rows) if auto_chance else rows
+
+
+# jscpd:ignore-end
+# jscpd:ignore-start
+def evaluate_participant_stimulus_onset_scan(
+    data_folder,
+    participant,
+    *,
+    config=None,
+    train_window_center=DEFAULT_ONSET_SCAN_TRAIN_WINDOW_CENTER,  # noqa: F405
+    threshold_window=DEFAULT_ONSET_THRESHOLD_WINDOW,  # noqa: F405
+    threshold_quantile=DEFAULT_ONSET_THRESHOLD_QUANTILE,  # noqa: F405
+    threshold_method=DEFAULT_ONSET_THRESHOLD_METHOD,  # noqa: F405
+    min_consecutive=DEFAULT_ONSET_MIN_CONSECUTIVE,  # noqa: F405
+    min_duration=DEFAULT_ONSET_MIN_DURATION,  # noqa: F405
+    require_stable_prediction=DEFAULT_ONSET_REQUIRE_STABLE_PREDICTION,  # noqa: F405
+    detection_start_s=None,
+):
+    """Scan validation trials for stimulus identity without using onset at test time."""
+
+    config = _onset_scan_config(config)
+    core_config, auto_chance = _config_for_core(config)
+    scan_rows, event_rows = _core.evaluate_participant_stimulus_onset_scan(
+        data_folder,
+        participant,
+        config=core_config,
+        train_window_center=train_window_center,
+        threshold_window=threshold_window,
+        threshold_quantile=threshold_quantile,
+        threshold_method=threshold_method,
+        min_consecutive=min_consecutive,
+        min_duration=min_duration,
+        require_stable_prediction=require_stable_prediction,
+        detection_start_s=detection_start_s,
+    )
+    return (_patch_auto_chance(scan_rows) if auto_chance else scan_rows), event_rows
+
+
+# jscpd:ignore-end
+# pylint: disable-next=too-many-arguments,too-many-positional-arguments
 def export_time_resolved_stimulus_decoding(
     data_folder,
     participants,
@@ -27,14 +157,14 @@ def export_time_resolved_stimulus_decoding(
 ):
     """Run time-resolved stimulus decoding and write CSV/plot artifacts."""
 
-    config = config or StimulusDecodingConfig()  # noqa: F405
+    config = config or StimulusDecodingConfig()
     data_folder = _core.resolve_data_folder(data_folder)
     rows = []
     prediction_rows = []
     for participant in participants:
         if progress is not None:
             progress(f"START participant={participant}")
-        participant_rows, participant_prediction_rows = _core._evaluate_participant_time_resolved_stimulus_transfer(
+        participant_rows, participant_prediction_rows = evaluate_participant_stimulus_decoding_diagnostics(
             data_folder,
             participant,
             config=config,
@@ -63,6 +193,7 @@ def export_time_resolved_stimulus_decoding(
     return rows, summary_rows
 
 
+# jscpd:ignore-start
 def export_stimulus_temporal_generalization(
     data_folder,
     participants,
@@ -74,13 +205,13 @@ def export_stimulus_temporal_generalization(
 ):
     """Run stimulus temporal generalization and write CSV artifacts."""
 
-    config = config or StimulusDecodingConfig()  # noqa: F405
+    config = config or StimulusDecodingConfig()
     data_folder = _core.resolve_data_folder(data_folder)
     rows = []
     for participant in participants:
         if progress is not None:
             progress(f"START participant={participant}")
-        rows.extend(_core.evaluate_participant_stimulus_temporal_generalization(data_folder, participant, config=config))
+        rows.extend(evaluate_participant_stimulus_temporal_generalization(data_folder, participant, config=config))
         if progress is not None:
             progress(f"DONE participant={participant}")
     _core.write_alpha_metrics_csv(rows, output_path)
@@ -88,6 +219,159 @@ def export_stimulus_temporal_generalization(
     if summary_output_path:
         _core.write_alpha_metrics_csv(summary_rows, summary_output_path)
     return rows, summary_rows
+
+
+# jscpd:ignore-end
+# jscpd:ignore-start
+# pylint: disable-next=too-many-arguments,too-many-positional-arguments
+def export_stimulus_onset_scan(
+    data_folder,
+    participants,
+    output_path,
+    events_output_path,
+    *,
+    summary_output_path=None,
+    event_summary_output_path=None,
+    config=None,
+    train_window_center=DEFAULT_ONSET_SCAN_TRAIN_WINDOW_CENTER,  # noqa: F405
+    threshold_window=DEFAULT_ONSET_THRESHOLD_WINDOW,  # noqa: F405
+    threshold_quantile=DEFAULT_ONSET_THRESHOLD_QUANTILE,  # noqa: F405
+    threshold_method=DEFAULT_ONSET_THRESHOLD_METHOD,  # noqa: F405
+    min_consecutive=DEFAULT_ONSET_MIN_CONSECUTIVE,  # noqa: F405
+    min_duration=DEFAULT_ONSET_MIN_DURATION,  # noqa: F405
+    require_stable_prediction=DEFAULT_ONSET_REQUIRE_STABLE_PREDICTION,  # noqa: F405
+    detection_start_s=None,
+    progress=None,
+):
+    """Run onset-blind stimulus scanning and write trial/window and event CSVs."""
+
+    config = _onset_scan_config(config)
+    data_folder = _core.resolve_data_folder(data_folder)
+    scan_rows = []
+    event_rows = []
+    for participant in participants:
+        if progress is not None:
+            progress(f"START participant={participant}")
+        participant_scan_rows, participant_event_rows = evaluate_participant_stimulus_onset_scan(
+            data_folder,
+            participant,
+            config=config,
+            train_window_center=train_window_center,
+            threshold_window=threshold_window,
+            threshold_quantile=threshold_quantile,
+            threshold_method=threshold_method,
+            min_consecutive=min_consecutive,
+            min_duration=min_duration,
+            require_stable_prediction=require_stable_prediction,
+            detection_start_s=detection_start_s,
+        )
+        scan_rows.extend(participant_scan_rows)
+        event_rows.extend(participant_event_rows)
+        if progress is not None:
+            progress(f"DONE participant={participant}")
+
+    _core.write_alpha_metrics_csv(scan_rows, output_path)
+    _core.write_alpha_metrics_csv(event_rows, events_output_path)
+    summary_rows = summarize_stimulus_onset_scan(scan_rows)  # noqa: F405
+    if summary_output_path:
+        _core.write_alpha_metrics_csv(summary_rows, summary_output_path)
+    event_summary_rows = summarize_stimulus_onset_events(event_rows)  # noqa: F405
+    if event_summary_output_path:
+        _core.write_alpha_metrics_csv(event_summary_rows, event_summary_output_path)
+    return scan_rows, event_rows, summary_rows, event_summary_rows
+
+
+# jscpd:ignore-end
+def _onset_scan_config(config):
+    if config is not None:
+        return config
+    return StimulusDecodingConfig(
+        window_centers=window_centers_from_range(  # noqa: F405
+            DEFAULT_ONSET_SCAN_TIME_WINDOW,  # noqa: F405
+            DEFAULT_ONSET_SCAN_STEP_S,  # noqa: F405
+        ),
+    )
+
+
+def _config_for_core(config):
+    config = config or StimulusDecodingConfig()
+    auto_chance = _uses_auto_chance(config)
+    if auto_chance:
+        return _replace(config, chance_classes=1), True
+    return config, False
+
+
+def _uses_auto_chance(config):
+    chance_classes = getattr(config, "chance_classes", None)
+    if chance_classes is None:
+        return True
+    if isinstance(chance_classes, str):
+        return chance_classes.strip().lower() in {"auto", "actual", "infer", "inferred"}
+    try:
+        return int(chance_classes) == int(_core.DEFAULT_CHANCE_CLASSES)
+    except (TypeError, ValueError, OverflowError):
+        return False
+
+
+def _patch_auto_chance(rows):
+    patched_rows = [dict(row) for row in rows]
+    true_label_class_counts = _true_label_class_counts(patched_rows)
+    for row in patched_rows:
+        class_count = _row_validation_class_count(row, true_label_class_counts)
+        if class_count is None:
+            continue
+        chance_accuracy = 1.0 / class_count
+        row["chance_accuracy"] = chance_accuracy
+        row["chance_percent"] = 100.0 * chance_accuracy
+        if "accuracy" in row:
+            accuracy = _to_float(row.get("accuracy"))
+            row["above_chance"] = bool(_np.isfinite(accuracy) and accuracy > chance_accuracy)
+    return patched_rows
+
+
+def _row_validation_class_count(row, true_label_class_counts):
+    class_count = _positive_int(row.get("n_validation_classes"))
+    if class_count is not None:
+        return class_count
+    return true_label_class_counts.get(_chance_group_key(row))
+
+
+def _true_label_class_counts(rows):
+    labels_by_group = {}
+    for row in rows:
+        if "true_label" not in row:
+            continue
+        labels_by_group.setdefault(_chance_group_key(row), set()).add(row["true_label"])
+    return {
+        group_key: len(labels)
+        for group_key, labels in labels_by_group.items()
+        if labels
+    }
+
+
+def _chance_group_key(row):
+    return (
+        row.get("participant"),
+        row.get("variant"),
+        row.get("transfer_direction"),
+    )
+
+
+def _positive_int(value):
+    try:
+        parsed = int(float(value))
+    except (TypeError, ValueError, OverflowError):
+        return None
+    if parsed <= 0:
+        return None
+    return parsed
+
+
+def _to_float(value):
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return _np.nan
 
 
 def __getattr__(name):
