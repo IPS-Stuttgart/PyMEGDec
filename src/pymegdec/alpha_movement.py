@@ -25,6 +25,7 @@ DEFAULT_SENSOR_PATTERN = r"^M"
 DEFAULT_MOVEMENT_TIME_WINDOW = (-0.4, 0.8)
 DEFAULT_TRAJECTORY_STEP_S = 0.02
 POWER_EPSILON = 1e-12
+DEFAULT_MIN_TOTAL_ALPHA_POWER = 0.0
 
 
 @dataclass(frozen=True)
@@ -39,6 +40,7 @@ class AlphaMovementConfig:
     sensor_position_unit: str = DEFAULT_SENSOR_POSITION_UNIT
     projection_reference_pattern: str | None = DEFAULT_PROJECTION_REFERENCE_PATTERN
     min_reference_axis_projection: float = DEFAULT_MIN_REFERENCE_AXIS_PROJECTION
+    min_total_alpha_power: float = DEFAULT_MIN_TOTAL_ALPHA_POWER
 
 
 @dataclass(frozen=True)
@@ -126,8 +128,30 @@ def _alpha_power(signal, time_vector, sample_indices, config):
     return np.abs(np.take(alpha_window, relative_indices, axis=-1)) ** 2
 
 
+def _validated_min_total_alpha_power(min_total_alpha_power):
+    value = float(min_total_alpha_power)
+    if not np.isfinite(value) or value < 0.0:
+        raise ValueError("min_total_alpha_power must be finite and non-negative.")
+    return value
+
+
+def _has_reliable_power(weights, min_total_alpha_power):
+    weights = np.asarray(weights, dtype=float).ravel()
+    if weights.size == 0:
+        raise ValueError("alpha power weights must contain at least one channel.")
+    if np.any(weights < 0.0):
+        raise ValueError("alpha power weights must be non-negative.")
+    if not np.all(np.isfinite(weights)):
+        return False
+    return float(np.sum(weights)) > min_total_alpha_power
+
+
 def _spatial_concentration(weights):
-    probabilities = weights / np.sum(weights)
+    weights = np.asarray(weights, dtype=float).ravel()
+    total_weight = float(np.sum(weights)) if weights.size else np.nan
+    if weights.size == 0 or not np.isfinite(total_weight) or total_weight <= 0.0 or not np.all(np.isfinite(weights)):
+        return np.nan
+    probabilities = weights / total_weight
     entropy = -float(np.sum(probabilities * np.log(probabilities + POWER_EPSILON)))
     max_entropy = np.log(weights.size)
     if max_entropy <= 0:
@@ -154,12 +178,16 @@ def _movement_values(centroid, projected, first, previous, previous_time, time_s
         projected_speed = float(np.linalg.norm(projected - previous["projected"]) / dt)
 
     projected_step = projected - previous["projected"]
+    if float(np.linalg.norm(projected_step)) == 0.0:
+        projected_direction = np.nan
+    else:
+        projected_direction = float(np.arctan2(projected_step[1], projected_step[0]))
     return {
         "displacement_mm": float(np.linalg.norm(centroid - first["centroid"])),
         "projected_displacement_mm": float(np.linalg.norm(projected - first["projected"])),
         "speed_mm_per_s": speed,
         "projected_speed_mm_per_s": projected_speed,
-        "projected_direction_rad": float(np.arctan2(projected_step[1], projected_step[0])),
+        "projected_direction_rad": projected_direction,
     }
 
 
@@ -187,13 +215,23 @@ def _selected_geometry(
     )
 
 
-def _trajectory_row(context, geometry, weights, time_s, state):
-    centroid = np.average(geometry.positions, axis=0, weights=weights)
-    projected = np.average(geometry.projected_positions, axis=0, weights=weights)
-    peak_local_index = int(np.argmax(weights))
-    current = {"centroid": centroid, "projected": projected}
-    if state.first is None:
-        state.first = current
+def _empty_movement_values():
+    return {
+        "displacement_mm": np.nan,
+        "projected_displacement_mm": np.nan,
+        "speed_mm_per_s": np.nan,
+        "projected_speed_mm_per_s": np.nan,
+        "projected_direction_rad": np.nan,
+    }
+
+
+def _trajectory_row(context, geometry, weights, time_s, state, min_total_alpha_power=DEFAULT_MIN_TOTAL_ALPHA_POWER):
+    weights = np.asarray(weights, dtype=float).ravel()
+    total_alpha_power = float(np.sum(weights)) if weights.size else np.nan
+    mean_alpha_power = float(np.mean(weights)) if weights.size else np.nan
+    finite_weights = weights[np.isfinite(weights)]
+    peak_alpha_power = float(np.max(finite_weights)) if finite_weights.size else np.nan
+    reliable_power = _has_reliable_power(weights, min_total_alpha_power)
 
     row = {
         "participant": (context.participant_id if context.participant_id is not None else ""),
@@ -204,18 +242,41 @@ def _trajectory_row(context, geometry, weights, time_s, state):
         "low_freq": context.config.frequency_range[0],
         "high_freq": context.config.frequency_range[1],
         "n_channels": int(geometry.channel_indices.size),
-        "mean_alpha_power": float(np.mean(weights)),
-        "total_alpha_power": float(np.sum(weights)),
-        "peak_alpha_power": float(weights[peak_local_index]),
-        "peak_channel": int(geometry.channel_indices[peak_local_index]),
-        "peak_channel_name": str(geometry.channel_names[peak_local_index]),
+        "mean_alpha_power": mean_alpha_power,
+        "total_alpha_power": total_alpha_power,
+        "peak_alpha_power": peak_alpha_power,
+        "peak_channel": -1,
+        "peak_channel_name": "",
         "spatial_concentration": _spatial_concentration(weights),
-        "centroid_x_mm": float(centroid[0]),
-        "centroid_y_mm": float(centroid[1]),
-        "centroid_z_mm": float(centroid[2]),
-        "projected_x_mm": float(projected[0]),
-        "projected_y_mm": float(projected[1]),
+        "centroid_x_mm": np.nan,
+        "centroid_y_mm": np.nan,
+        "centroid_z_mm": np.nan,
+        "projected_x_mm": np.nan,
+        "projected_y_mm": np.nan,
     }
+
+    if not reliable_power:
+        row.update(_empty_movement_values())
+        return row
+
+    centroid = np.average(geometry.positions, axis=0, weights=weights)
+    projected = np.average(geometry.projected_positions, axis=0, weights=weights)
+    peak_local_index = int(np.argmax(weights))
+    current = {"centroid": centroid, "projected": projected}
+    if state.first is None:
+        state.first = current
+
+    row.update(
+        {
+            "peak_channel": int(geometry.channel_indices[peak_local_index]),
+            "peak_channel_name": str(geometry.channel_names[peak_local_index]),
+            "centroid_x_mm": float(centroid[0]),
+            "centroid_y_mm": float(centroid[1]),
+            "centroid_z_mm": float(centroid[2]),
+            "projected_x_mm": float(projected[0]),
+            "projected_y_mm": float(projected[1]),
+        }
+    )
     row.update(
         _movement_values(
             centroid,
@@ -243,6 +304,7 @@ def compute_alpha_movement_trajectory(
     """Track the alpha-power centroid across the MEG sensor array for one trial."""
 
     config = config or AlphaMovementConfig()
+    min_total_alpha_power = _validated_min_total_alpha_power(config.min_total_alpha_power)
     trial_signal = get_trial_signal(data, trial_idx)
     channel_indices = _resolve_channel_indices(data, channel_indices, config.location_pattern)
     time_vector = get_time_vector(data, trial_idx)
@@ -267,9 +329,10 @@ def compute_alpha_movement_trajectory(
         _trajectory_row(
             context,
             geometry,
-            powers[:, column] + POWER_EPSILON,
+            powers[:, column],
             float(time_vector[time_index]),
             state,
+            min_total_alpha_power,
         )
         for column, time_index in enumerate(sample_indices)
     ]
