@@ -22,19 +22,40 @@ def _structured_data(trials, times):
 
 class TestPreprocessing(unittest.TestCase):
     def test_extract_windows_uses_inclusive_matlab_column_order(self):
-        time = np.array([[-0.2, -0.1, 0.0, 0.1, 0.2]])
+        time = np.array([[-0.4, -0.3, -0.2, -0.1, 0.0, 0.1, 0.2]])
         trial = np.array(
             [
-                [1, 2, 3, 4, 5],
-                [11, 12, 13, 14, 15],
+                [1, 2, 3, 4, 5, 6, 7],
+                [11, 12, 13, 14, 15, 16, 17],
             ]
         )
         data = _data([trial], [time])
 
-        stimuli, null = extract_windows(data, (-0.1, 0.1), (-0.2, 0.0))
+        stimuli, null = extract_windows(data, (-0.1, 0.1), (-0.4, -0.2))
 
-        np.testing.assert_array_equal(stimuli[0].ravel(), [2, 12, 3, 13, 4, 14])
+        np.testing.assert_array_equal(stimuli[0].ravel(), [4, 14, 5, 15, 6, 16])
         np.testing.assert_array_equal(null[0].ravel(), [1, 11, 2, 12, 3, 13])
+
+    def test_preprocess_features_rejects_touching_null_train_windows(self):
+        time = np.array([[-0.3, -0.2, -0.1, 0.0, 0.1]])
+        trial = np.array([[1, 2, 3, 4, 5]], dtype=float)
+        data = _data([trial], [time])
+
+        with self.assertRaisesRegex(ValueError, "strictly before"):
+            preprocess_features(data, (0, float("inf")), float("inf"), 0.2, 0.0, -0.2)
+
+    def test_extract_windows_rejects_rounded_null_sample_overlap(self):
+        time = np.array([[-0.4, -0.3, -0.2, -0.1, 0.0, 0.1, 0.2]])
+        trial = np.array(
+            [
+                [1, 2, 3, 4, 5, 6, 7],
+                [11, 12, 13, 14, 15, 16, 17],
+            ]
+        )
+        data = _data([trial], [time])
+
+        with self.assertRaisesRegex(ValueError, "overlap"):
+            extract_windows(data, (-0.1, 0.1), (-0.25, -0.11))
 
     def test_downsample_returns_new_data_without_mutating_input(self):
         time = np.array([[0.0, 0.25, 0.5, 0.75, 1.0]])
