@@ -17,6 +17,7 @@ from pymegdec.alpha_metrics import (
     load_participant_data,
     project_channel_positions,
     select_channels,
+    uniform_sample_interval,
     write_alpha_metrics_csv,
 )
 from pymegdec.alpha_signal import get_data_field, get_time_vector, get_trial_signal
@@ -86,10 +87,7 @@ def _resolve_channel_indices(data, channel_indices, location_pattern):
 
 
 def _sampling_rate(time_vector):
-    diffs = np.diff(time_vector)
-    if diffs.size == 0:
-        raise ValueError("Time vector must contain at least two samples.")
-    return float(1 / np.median(diffs))
+    return float(1 / uniform_sample_interval(time_vector))
 
 
 def sample_time_indices(time_vector, time_window, trajectory_step_s):
@@ -100,9 +98,8 @@ def sample_time_indices(time_vector, time_window, trajectory_step_s):
         raise ValueError("time_window start must be before stop.")
 
     time_vector = np.asarray(time_vector, dtype=float).ravel()
-    if time_vector.size < 2:
-        raise ValueError("Time vector must contain at least two samples.")
-    tolerance = max(abs(float(np.median(np.diff(time_vector)))) * 1e-6, 1e-12)
+    sample_interval = uniform_sample_interval(time_vector)
+    tolerance = max(abs(sample_interval) * 1e-6, 1e-12)
     window_indices = np.flatnonzero((time_vector >= start - tolerance) & (time_vector <= stop + tolerance))
     if window_indices.size == 0:
         raise ValueError(f"time_window {time_window} does not overlap the data.")
