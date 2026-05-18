@@ -3,14 +3,16 @@
 from __future__ import annotations
 
 import numpy as np
-from reptrace.decoding.class_scores import predict_window_class_scores
+from reptrace.decoding.class_scores import class_score_matrix, predict_window_class_scores
 from reptrace.metrics import rank_class_scores
 
 
 def mcca_score_matrix(bundle, features):
     """Return upstream RepTrace per-class scores for a fitted M-CCA window bundle."""
 
-    return predict_window_class_scores(bundle, features)
+    if hasattr(bundle, "pca_coeff") and hasattr(bundle, "train_features_mean"):
+        return predict_window_class_scores(bundle, features)
+    return class_score_matrix(bundle.model, features, fallback_labels=getattr(bundle, "train_labels", None))
 
 
 def mcca_rank_metrics(scores, classes, y_true):
