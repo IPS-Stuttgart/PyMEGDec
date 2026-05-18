@@ -15,36 +15,17 @@ dependencies = [
     "matplotlib",
     "numpy",
     "pandas>=3.0.3,<4.0.0",
-    "reptrace @ git+https://github.com/IPS-Stuttgart/RepTrace.git@1c7044442bd059658ffe98e4944235afd86c79e0",
+    "reptrace @ git+https://github.com/IPS-Stuttgart/RepTrace.git@8d55371115251528dc20436bac6af2c329b5159a",
     "scikit-learn",
     "scipy",
 ]
 
 [project.optional-dependencies]
-xgboost = [
-    "xgboost",
-]
-torch = [
-    "pytorch-lightning",
-    "torch",
-]
-all = [
-    "pytorch-lightning",
-    "torch",
-    "xgboost",
-]
-ml = [
-    "pytorch-lightning",
-    "torch",
-    "xgboost",
-]
-dev = [
-    "autopep8>=2.3.2,<3.0.0",
-    "pytest",
-    "pytorch-lightning",
-    "torch",
-    "xgboost",
-]
+xgboost = ["xgboost"]
+torch = ["pytorch-lightning", "torch"]
+all = ["pytorch-lightning", "torch", "xgboost"]
+ml = ["pytorch-lightning", "torch", "xgboost"]
+dev = ["autopep8>=2.3.2,<3.0.0", "pytest", "pytorch-lightning", "torch", "xgboost"]
 
 [project.scripts]
 pymegdec = "pymegdec.grouped_cli:main"
@@ -77,38 +58,3 @@ profile = "black"
 
 [tool.ruff]
 line-length = 180
-
-[tool.pylint.MAIN]
-py-version = "3.13"
-fail-under = 10
-ignore = ["CVS"]
-
-[tool.pylint."MESSAGES CONTROL"]
-disable = [
-  "raw-checker-failed",
-  "bad-inline-option",
-  "locally-disabled",
-  "file-ignored",
-  "suppressed-message",
-  "deprecated-pragma",
-  "use-symbolic-message-instead",
-  "C",
-  "W0221",
-  "duplicate-code",
-  "import-error",
-  "redefined-builtin",
-  "cyclic-import",
-  "implicit-str-concat",
-]
-
-[tool.pylint.FORMAT]
-max-line-length = 180
-
-[tool.pylint.DESIGN]
-max-args = 9
-max-attributes = 12
-max-locals = 29
-max-positional-arguments = 9
-max-parents = 15
-max-public-methods = 25
-min-public-methods = 0
