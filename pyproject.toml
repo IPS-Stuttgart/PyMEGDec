@@ -15,7 +15,7 @@ dependencies = [
     "matplotlib",
     "numpy",
     "pandas>=3.0.3,<4.0.0",
-    "reptrace @ git+https://github.com/IPS-Stuttgart/RepTrace.git@7a0b3d3da271339c98c74c823b2f1a7eaccec324",
+    "reptrace @ git+https://github.com/IPS-Stuttgart/RepTrace.git@27231b99903294872b55f0de7d7205200a9b7733",
     "scikit-learn",
     "scipy",
 ]
