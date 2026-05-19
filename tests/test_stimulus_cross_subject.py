@@ -137,6 +137,55 @@ class TestStimulusCrossSubject(unittest.TestCase):
         self.assertTrue(np.allclose(np.mean(feature_set.features, axis=1), 0.0))
         self.assertTrue(np.allclose(np.std(feature_set.features, axis=1), 1.0))
 
+    def test_sensor_mean_slope_keeps_channel_mean_and_temporal_trend(self):
+        time = np.asarray([-0.5, 0.0, 0.1, 0.2], dtype=float)
+        trials = [
+            [[0.0, 0.0, 1.0, 3.0], [0.0, 0.0, 2.0, 6.0]],
+            [[0.0, 0.0, 2.0, 4.0], [0.0, 0.0, 4.0, 8.0]],
+        ]
+        data_by_participant = {1: _mat_data_from_trials([1, 2], trials, time)}
+        config = CrossSubjectStimulusConfig(
+            window_center=0.15,
+            window_size=0.1,
+            feature_mode="sensor_mean_slope",
+            normalization="none",
+            components_pca=float("inf"),
+            chance_classes=2,
+        )
+
+        with patch("pymegdec.stimulus_cross_subject.sio.loadmat", side_effect=_loadmat_side_effect(data_by_participant)):
+            feature_set = load_participant_stimulus_features("unused", 1, config=config)
+
+        self.assertEqual(feature_set.features.shape, (2, 4))
+        np.testing.assert_allclose(feature_set.features[0], np.asarray([2.0, 4.0, 2.0, 4.0]))
+        np.testing.assert_allclose(feature_set.features[1], np.asarray([3.0, 6.0, 2.0, 4.0]))
+
+    def test_sensor_mean_slope_supports_baseline_whitening(self):
+        time = np.asarray([-0.5, 0.0, 0.1, 0.2], dtype=float)
+        trials = [
+            [[-1.0, -0.8, 1.0, 1.2], [0.5, 0.7, 3.0, 3.2]],
+            [[-0.4, -0.2, 2.0, 2.2], [1.1, 1.3, 4.0, 4.2]],
+            [[0.2, 0.4, 3.0, 3.2], [1.7, 1.9, 5.0, 5.2]],
+            [[0.8, 1.0, 4.0, 4.2], [2.3, 2.5, 6.0, 6.2]],
+        ]
+        data_by_participant = {1: _mat_data_from_trials([1, 2, 1, 2], trials, time)}
+        config = CrossSubjectStimulusConfig(
+            window_center=0.15,
+            window_size=0.1,
+            feature_mode="sensor_mean_slope",
+            normalization="subject_baseline_whiten",
+            components_pca=float("inf"),
+            chance_classes=2,
+        )
+
+        with patch("pymegdec.stimulus_cross_subject.sio.loadmat", side_effect=_loadmat_side_effect(data_by_participant)):
+            feature_set = load_participant_stimulus_features("unused", 1, config=config)
+
+        self.assertEqual(feature_set.features.shape, (4, 4))
+        self.assertEqual(feature_set.baseline_feature_mean.shape, (1, 4))
+        self.assertEqual(feature_set.baseline_whitening_matrix.shape, (2, 2))
+        self.assertTrue(np.all(np.isfinite(feature_set.features)))
+
     def test_sensor_flat_subject_baseline_whiten_uses_channel_covariance(self):
         time = np.asarray([-0.5, 0.0, 0.1, 0.2], dtype=float)
         trials = [

@@ -39,6 +39,7 @@ from pymegdec.stimulus_cross_subject import (
     DEFAULT_CROSS_SUBJECT_TRIAL_SELECTION,
     DEFAULT_CROSS_SUBJECT_TRIAL_SELECTION_SEED,
     DEFAULT_CROSS_SUBJECT_PARTICIPANTS,
+    FEATURE_MODES,
     DEFAULT_CROSS_SUBJECT_SELECTION_ENSEMBLE_SIZE,
     DEFAULT_CROSS_SUBJECT_SELECTION_ENSEMBLE_TEMPERATURE,
     DEFAULT_CROSS_SUBJECT_SELECTION_ENSEMBLE_WEIGHTING,
@@ -274,7 +275,7 @@ def _build_cross_subject_smoke_parser(prog: str | None = None) -> argparse.Argum
     parser.add_argument("--window-size", type=float, default=DEFAULT_CROSS_SUBJECT_WINDOW_SIZE, help="Stimulus decoding window size in seconds.")
     parser.add_argument("--baseline-window", type=_parse_time_window, default=DEFAULT_CROSS_SUBJECT_BASELINE_WINDOW, help="Baseline window as start,stop in seconds.")
     parser.add_argument(
-        "--feature-mode", type=_feature_mode_token, default=DEFAULT_CROSS_SUBJECT_FEATURE_MODE, choices=("sensor_mean", "sensor_flat"), help="Feature extraction mode."
+        "--feature-mode", type=_feature_mode_token, default=DEFAULT_CROSS_SUBJECT_FEATURE_MODE, choices=FEATURE_MODES, help="Feature extraction mode."
     )
     parser.add_argument(
         "--normalization",
@@ -386,7 +387,7 @@ def _build_cross_subject_cue_calibrated_parser(prog: str | None = None) -> argpa
     parser.add_argument("--window-size", type=float, default=DEFAULT_CROSS_SUBJECT_WINDOW_SIZE, help="Main-task decoding window size in seconds.")
     parser.add_argument("--baseline-window", type=_parse_time_window, default=DEFAULT_CROSS_SUBJECT_BASELINE_WINDOW, help="Main-task baseline window as start,stop in seconds.")
     parser.add_argument(
-        "--feature-mode", type=_feature_mode_token, default=DEFAULT_CROSS_SUBJECT_FEATURE_MODE, choices=("sensor_mean", "sensor_flat"), help="Main-task feature extraction mode."
+        "--feature-mode", type=_feature_mode_token, default=DEFAULT_CROSS_SUBJECT_FEATURE_MODE, choices=FEATURE_MODES, help="Main-task feature extraction mode."
     )
     parser.add_argument(
         "--normalization",
@@ -427,7 +428,7 @@ def _build_cross_subject_cue_calibrated_parser(prog: str | None = None) -> argpa
         "--calibration-feature-mode",
         type=_feature_mode_token,
         default=DECODE_REFERENCE_TOKEN,
-        choices=(DECODE_REFERENCE_TOKEN, "sensor_mean", "sensor_flat"),
+        choices=(DECODE_REFERENCE_TOKEN, *FEATURE_MODES),
         help="Cue calibration feature mode. decode reuses --feature-mode.",
     )
     parser.add_argument(

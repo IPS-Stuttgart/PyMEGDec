@@ -74,7 +74,7 @@ on:
       feature_modes:
         description: Candidate feature modes.
         required: true
-        default: sensor_flat
+        default: sensor_flat,sensor_mean_slope
         type: string
       normalizations:
         description: Candidate normalization modes.
