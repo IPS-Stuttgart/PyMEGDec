@@ -14,7 +14,7 @@ pymegdec stimulus cross-subject-mcca \
   --mcca-regularization 1e-6 \
   --mcca-sample-mode class_repetition \
   --mcca-repetitions-per-class 10 \
-  --target-centering target_unsupervised \
+  --target-centering group_mean \
   --outer-output "$OUT_DIR/mcca_outer.csv" \
   --summary-output "$OUT_DIR/mcca_group_summary.csv" \
   --predictions-output "$OUT_DIR/mcca_predictions.csv" \
@@ -28,7 +28,7 @@ pymegdec stimulus cross-subject-hyperalignment \
   --hyperalignment-iterations 10 \
   --hyperalignment-sample-mode class_repetition \
   --hyperalignment-repetitions-per-class 10 \
-  --target-centering target_unsupervised \
+  --target-centering group_mean \
   --outer-output "$OUT_DIR/hyperalignment_outer.csv" \
   --summary-output "$OUT_DIR/hyperalignment_group_summary.csv" \
   --predictions-output "$OUT_DIR/hyperalignment_predictions.csv" \

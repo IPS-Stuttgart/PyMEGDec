@@ -19,14 +19,14 @@ from pymegdec.classifiers import (
     train_multiclass_classifier,
 )
 from pymegdec.data_config import resolve_data_folder
-from reptrace.decoding.windowed import fit_window_model as fit_reptrace_window_model
-from reptrace.decoding.windowed import (
+from neureptrace.decoding.windowed import fit_window_model as fit_reptrace_window_model
+from neureptrace.decoding.windowed import (
     predict_window_model as predict_reptrace_window_model,
 )
-from reptrace.decoding.windowed import (
+from neureptrace.decoding.windowed import (
     transform_window_features as transform_reptrace_window_features,
 )
-from reptrace.decoding.normalization import (
+from neureptrace.decoding.normalization import (
     BASELINE_WHITENING_EIGENVALUE_FLOOR as REPTRACE_BASELINE_WHITENING_EIGENVALUE_FLOOR,
     BASELINE_WHITENING_SHRINKAGE as REPTRACE_BASELINE_WHITENING_SHRINKAGE,
     NORMALIZATION_MODES as REPTRACE_NORMALIZATION_MODES,
@@ -41,7 +41,7 @@ from reptrace.decoding.normalization import (
     trial_zscore_features as reptrace_trial_zscore_features,
     whitening_matrix as reptrace_whitening_matrix,
 )
-from reptrace.metrics.confusion import (
+from neureptrace.metrics.confusion import (
     confusion_category_enrichment,
     confusion_category_matrix,
     confusion_counts,
@@ -568,7 +568,74 @@ def summarize_cross_subject_predictions(prediction_rows):
         participant_column="test_participant",
         group_columns=group_columns,
     )
+    per_stimulus = _add_per_stimulus_rank_metrics(frame, per_stimulus, group_columns=group_columns)
     return confusion.to_dict(orient="records"), per_stimulus.to_dict(orient="records")
+
+
+def _add_per_stimulus_rank_metrics(frame, per_stimulus, *, group_columns):
+    """Add top-k and true-label-rank summaries to per-stimulus rows.
+
+    ``per_class_accuracy`` reports top-1 recall by true class.  For
+    cross-person decoding, it is useful to know whether the correct stimulus was
+    still among the highly ranked alternatives even when top-1 is wrong.  This
+    helper keeps the existing top-1 columns intact and appends per-stimulus
+    top-2/top-3 and rank summaries whenever trial-level ranks are available.
+    """
+
+    if per_stimulus.empty or "true_label_rank" not in frame.columns:
+        return per_stimulus
+
+    import pandas as pd
+
+    required = [*group_columns, "true_stimulus", "true_label_rank"]
+    if any(column not in frame.columns for column in required):
+        return per_stimulus
+
+    working = frame[list(dict.fromkeys(required))].copy()
+    ranks = pd.to_numeric(working["true_label_rank"], errors="coerce")
+    rank_values = ranks.to_numpy(dtype=float)
+    finite = np.isfinite(rank_values)
+    working["_true_label_rank"] = ranks
+    working["_top2_correct"] = finite & (rank_values <= 2)
+    working["_top3_correct"] = finite & (rank_values <= 3)
+
+    keys = [*group_columns, "true_stimulus"]
+    rows = []
+    for group_key, group in working.groupby(keys, dropna=False, sort=True):
+        if len(keys) == 1 and not isinstance(group_key, tuple):
+            group_key = (group_key,)
+        row = dict(zip(keys, group_key))
+        row["true_label"] = row.pop("true_stimulus")
+        group_ranks = group["_true_label_rank"].to_numpy(dtype=float)
+        finite_ranks = group_ranks[np.isfinite(group_ranks)]
+        top2_accuracy = float(group["_top2_correct"].mean())
+        top3_accuracy = float(group["_top3_correct"].mean())
+        row.update(
+            {
+                "n_ranked_trials": int(finite_ranks.size),
+                "top2_accuracy": top2_accuracy,
+                "top2_percent": 100.0 * top2_accuracy,
+                "top3_accuracy": top3_accuracy,
+                "top3_percent": 100.0 * top3_accuracy,
+                "mean_true_label_rank": float(np.mean(finite_ranks)) if finite_ranks.size else np.nan,
+                "median_true_label_rank": float(np.median(finite_ranks)) if finite_ranks.size else np.nan,
+            }
+        )
+        rows.append(row)
+
+    if not rows:
+        return per_stimulus
+
+    rank_frame = pd.DataFrame(rows)
+    merge_columns = [*group_columns, "true_label"]
+    overlapping_metric_columns = [
+        column
+        for column in rank_frame.columns
+        if column in per_stimulus.columns and column not in merge_columns
+    ]
+    if overlapping_metric_columns:
+        per_stimulus = per_stimulus.drop(columns=overlapping_metric_columns)
+    return per_stimulus.merge(rank_frame, on=merge_columns, how="left")
 
 
 def summarize_cross_subject_confusion_pairs(prediction_rows, *, stimulus_metadata_rows=None):

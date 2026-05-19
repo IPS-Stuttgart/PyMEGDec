@@ -79,6 +79,11 @@ pymegdec stimulus cross-subject-nested \
   --max-trials-per-class-per-participant 10
 ```
 
+The nested cross-subject grid now defaults to evaluating both `none` and
+`train_class_procrustes` alignments. This makes the strict train-only
+hyperalignment baseline part of the standard model-selection run instead of
+requiring an explicit `--alignments none,train_class_procrustes` override.
+
 The trial cap is a deterministic screening option: by default it draws a seeded
 random subset of `N` trials from each stimulus class for each participant,
 preserving nested LOSO while avoiding a file-order or block-order bias in fast
@@ -101,6 +106,24 @@ center, feature mode, normalization, alignment, and PCA components. It also
 reports the inner winner margin, defined per outer fold as the best inner
 balanced accuracy minus the second-best inner balanced accuracy, to make noisy
 hyperparameter selection visible.
+
+For cross-person latency jitter, average scores over small windows around each
+nominal candidate center instead of trusting a single fixed latency. This keeps
+the same strict outer LOSO split: the held-out participant's labels are not used
+for choosing or fitting the jittered windows. The inner LOSO score for a
+candidate is computed from the jittered score ensemble, and the final outer
+model is refit on all outer-training participants for every requested offset:
+
+```bash
+pymegdec stimulus cross-subject-nested \
+  --participants 1-4,6,8,9,10,13-27 \
+  --window-centers 0.150,0.175,0.200 \
+  --window-size 0.1 \
+  --window-jitter-offsets=-0.025,0,0.025 \
+  --feature-modes sensor_flat \
+  --normalizations subject_baseline_z \
+  --selection-ensemble-score-normalization row_z_softmax
+```
 
 The `train_class_procrustes` alignment mode fits an orthogonal channel-space
 Procrustes transform from the outer-training participants only. It uses
@@ -182,8 +205,7 @@ pymegdec stimulus cross-subject-hyperalignment \
   --normalization subject_baseline_z \
   --classifier multiclass-svm \
   --components-pca 64 \
-  --hyper-components 64 \
-  --target-centering target_unsupervised
+  --hyperalignment-components 64
 ```
 
 ```bash
@@ -196,8 +218,7 @@ pymegdec stimulus cross-subject-mcca \
   --classifier multiclass-svm \
   --components-pca 64 \
   --mcca-components 64 \
-  --mcca-regularization 1e-6 \
-  --target-centering target_unsupervised
+  --mcca-regularization 1e-6
 ```
 
 The workflow default runs both `hyperalignment` and `mcca`, uses the same main
@@ -207,10 +228,15 @@ outer-fold and group-summary CSVs, and uploads them as
 predictions, confusion counts, per-stimulus recall, and confusion-pair summaries.
 
 Both methods fit the shared space from the outer-training participants. The
-default `target_unsupervised` option centers the held-out participant using its
-own unlabeled feature mean before projecting into the group space; use
-`group_mean` for a stricter target-independent centering control. Enable
-`label_shuffle_control` to check whether the shared-space pipeline returns
+default `group_mean` option is the strict LOSO setting: it projects the held-out
+participant with the source-group projection and source-group centering statistics,
+without using held-out main-task labels or held-out main-task feature moments.
+Use `--target-centering target_unsupervised` only for a separate transductive or
+unsupervised-adaptation analysis where using the held-out participant's unlabeled
+feature mean is scientifically intended. The CSV outputs include
+`evaluation_regime` and `target_adaptation` columns so strict LOSO, unsupervised
+adaptation, cue calibration, and labeled target calibration remain distinguishable.
+Enable `label_shuffle_control` to check whether the shared-space pipeline returns
 near-chance performance when training labels are shuffled within participants.
 
 Set `--alignment-data cue` to fit the M-CCA or hyperalignment projections from

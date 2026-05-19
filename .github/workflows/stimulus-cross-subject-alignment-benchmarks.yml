@@ -131,7 +131,7 @@ on:
       target_centering:
         description: How to center the held-out participant before group-space projection.
         required: true
-        default: target_unsupervised
+        default: group_mean
         type: choice
         options: [group_mean, target_unsupervised]
 

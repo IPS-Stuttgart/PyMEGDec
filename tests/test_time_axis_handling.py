@@ -96,12 +96,35 @@ class TestTimeAxisHandling(unittest.TestCase):
         np.testing.assert_allclose(feature_set.features.ravel(), [2.0, 13.0])
         self.assertEqual(feature_set.n_window_samples, 3)
 
-    def test_legacy_cross_subject_extractors_use_each_trial_time_vector_without_public_shim(self):
+    def test_legacy_cross_subject_module_is_removed(self):
+        """The old private bypass path must not remain importable."""
+
+        code = r'''
+import importlib
+
+try:
+    importlib.import_module("pymegdec._stimulus_cross_subject_legacy")
+except ModuleNotFoundError:
+    pass
+else:
+    raise AssertionError("legacy cross-subject module is still importable")
+'''
+        env = dict(os.environ)
+        env["PYTHONPATH"] = os.pathsep.join(sys.path) + os.pathsep + env.get("PYTHONPATH", "")
+        subprocess.run(
+            [sys.executable, "-c", code],
+            check=True,
+            env=env,
+            capture_output=True,
+            text=True,
+        )
+
+    def test_cross_subject_core_extractors_use_each_trial_time_vector_without_public_shim(self):
         """Guard the implementation path, not only the public facade import."""
 
         code = r'''
 import numpy as np
-from pymegdec import _stimulus_cross_subject_legacy as cross_subject
+from pymegdec import _stimulus_cross_subject_core as cross_subject
 
 
 def cell_array(values):

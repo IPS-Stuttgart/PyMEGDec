@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import numpy as np
-from reptrace.decoding.class_scores import class_score_matrix, predict_window_class_scores
-from reptrace.metrics import rank_class_scores
+from neureptrace.decoding.class_scores import class_score_matrix, predict_window_class_scores
+from neureptrace.metrics import rank_class_scores
 
 
 def mcca_score_matrix(bundle, features):
@@ -16,7 +16,7 @@ def mcca_score_matrix(bundle, features):
 
 
 def mcca_rank_metrics(scores, classes, y_true):
-    """Return the legacy PyMEGDec tuple shape from NeuRepTrace rank summaries."""
+    """Return PyMEGDec's tuple shape from NeuRepTrace rank summaries."""
 
     summary = rank_class_scores(scores, classes, y_true, top_k=(2, 3), row_top_k=3, class_column="stimulus")
     top_k_accuracy = summary["top_k_accuracy"]
@@ -49,7 +49,7 @@ def topk_and_rank_metrics(true_labels, class_scores, score_classes):
 
 
 def cross_subject_model_class_scores(model_bundle, features):
-    """Return class scores in the legacy cross-subject empty-matrix shape."""
+    """Return class scores in PyMEGDec's expected cross-subject empty-matrix shape."""
 
     scores, classes = predict_window_class_scores(model_bundle, features)
     if scores is None or classes is None:
@@ -72,7 +72,7 @@ def cross_subject_ranked_label_metrics(true_labels, class_scores, score_classes)
 
 
 def install_mcca(impl):
-    """Install upstream-backed M-CCA scoring helpers into the legacy module."""
+    """Install upstream-backed M-CCA scoring helpers into a PyMEGDec implementation."""
 
     impl._score_matrix = mcca_score_matrix
     impl._rank_metrics = mcca_rank_metrics

@@ -34,11 +34,14 @@ from pymegdec.stimulus_cross_subject import (
     DEFAULT_CROSS_SUBJECT_CLASSIFIER,
     DEFAULT_CROSS_SUBJECT_COMPONENTS_PCA,
     DEFAULT_CROSS_SUBJECT_FEATURE_MODE,
+    DEFAULT_CROSS_SUBJECT_NESTED_ALIGNMENTS,
+    DEFAULT_CROSS_SUBJECT_TRAINING_SAMPLE_WEIGHTING,
     DEFAULT_CROSS_SUBJECT_NESTED_WINDOW_CENTERS,
     DEFAULT_CROSS_SUBJECT_NORMALIZATION,
     DEFAULT_CROSS_SUBJECT_TRIAL_SELECTION,
     DEFAULT_CROSS_SUBJECT_TRIAL_SELECTION_SEED,
     DEFAULT_CROSS_SUBJECT_PARTICIPANTS,
+    DEFAULT_CROSS_SUBJECT_WINDOW_JITTER_OFFSETS,
     FEATURE_MODES,
     DEFAULT_CROSS_SUBJECT_SELECTION_ENSEMBLE_SIZE,
     DEFAULT_CROSS_SUBJECT_SELECTION_ENSEMBLE_TEMPERATURE,
@@ -56,6 +59,7 @@ from pymegdec.stimulus_cross_subject import (
     AUTO_COMPONENTS_PCA_GRID_TOKEN,
     CrossSubjectStimulusConfig,
     TRIAL_SELECTION_MODES,
+    TRAINING_SAMPLE_WEIGHTING_MODES,
     export_cross_subject_stimulus_smoke,
     export_nested_cross_subject_stimulus,
     make_cross_subject_candidate_configs,
@@ -80,7 +84,7 @@ from pymegdec.stimulus_decoding import (
     summarize_stimulus_prediction_diagnostics,
     window_centers_from_range,
 )
-from reptrace.decoding.robustness import (
+from neureptrace.decoding.robustness import (
     RobustnessCondition,
     run_participant_robustness_conditions,
 )
@@ -95,6 +99,34 @@ ROBUSTNESS_CONTROLS = (
     RobustnessCondition("pca_200", "Main-to-cue SVM, PCA 200, broadband", {"components_pca": 200}),
     RobustnessCondition("low_frequency", "Main-to-cue SVM, PCA 100, 0-30 Hz", {"frequency_range": (0.0, 30.0)}),
 )
+
+CROSS_PERSON_ROBUST_NESTED_WINDOW_CENTERS = (0.100, 0.125, 0.150, 0.175, 0.200, 0.225, 0.250, 0.275)
+CROSS_PERSON_ROBUST_NESTED_FEATURE_MODES = (
+    "sensor_mean",
+    "sensor_mean_slope",
+    "sensor_mean_slope_std",
+    "sensor_flat",
+)
+CROSS_PERSON_ROBUST_NESTED_NORMALIZATIONS = (
+    "subject_baseline_z",
+    "subject_baseline_whiten",
+    "subject_z",
+)
+CROSS_PERSON_ROBUST_NESTED_ALIGNMENTS = ("none", "train_class_procrustes")
+CROSS_PERSON_ROBUST_NESTED_CLASSIFIERS = (
+    "multiclass-svm",
+    "multiclass-svm-weighted",
+    "shrinkage-lda",
+    "shrinkage-prototype",
+    "multinomial-logistic-weighted",
+)
+CROSS_PERSON_ROBUST_NESTED_CLASSIFIER_PARAMS = (AUTO_CLASSIFIER_PARAM_GRID_TOKEN,)
+CROSS_PERSON_ROBUST_NESTED_COMPONENTS_PCA_VALUES = (16, AUTO_COMPONENTS_PCA_GRID_TOKEN)
+CROSS_PERSON_ROBUST_SELECTION_ENSEMBLE_SIZE = 5
+CROSS_PERSON_ROBUST_SELECTION_ENSEMBLE_DIVERSITY = "window_classifier"
+CROSS_PERSON_ROBUST_SELECTION_ENSEMBLE_SCORE_NORMALIZATION = "row_z_softmax"
+CROSS_PERSON_ROBUST_SELECTION_ENSEMBLE_WEIGHTING = "uniform"
+CROSS_PERSON_ROBUST_SELECTION_ENSEMBLE_TEMPERATURE = DEFAULT_CROSS_SUBJECT_SELECTION_ENSEMBLE_TEMPERATURE
 
 
 def _transfer_participants(participant_spec: str | None, data_folder) -> list[int]:
@@ -179,6 +211,27 @@ def _parse_classifier_param_grid(value: str) -> tuple[object, ...]:
     if not values:
         raise argparse.ArgumentTypeError("At least one classifier parameter value is required.")
     return tuple(values)
+
+
+def _apply_cross_person_robust_nested_preset(args: argparse.Namespace) -> argparse.Namespace:
+    """Apply a leakage-safe broad nested-LOSO preset for cross-person transfer."""
+
+    if not getattr(args, "cross_person_robust_preset", False):
+        return args
+
+    args.window_centers = CROSS_PERSON_ROBUST_NESTED_WINDOW_CENTERS
+    args.feature_modes = CROSS_PERSON_ROBUST_NESTED_FEATURE_MODES
+    args.normalizations = CROSS_PERSON_ROBUST_NESTED_NORMALIZATIONS
+    args.alignments = CROSS_PERSON_ROBUST_NESTED_ALIGNMENTS
+    args.classifiers = CROSS_PERSON_ROBUST_NESTED_CLASSIFIERS
+    args.classifier_params = CROSS_PERSON_ROBUST_NESTED_CLASSIFIER_PARAMS
+    args.components_pca_values = CROSS_PERSON_ROBUST_NESTED_COMPONENTS_PCA_VALUES
+    args.selection_ensemble_size = CROSS_PERSON_ROBUST_SELECTION_ENSEMBLE_SIZE
+    args.selection_ensemble_diversity = CROSS_PERSON_ROBUST_SELECTION_ENSEMBLE_DIVERSITY
+    args.selection_ensemble_score_normalization = CROSS_PERSON_ROBUST_SELECTION_ENSEMBLE_SCORE_NORMALIZATION
+    args.selection_ensemble_weighting = CROSS_PERSON_ROBUST_SELECTION_ENSEMBLE_WEIGHTING
+    args.selection_ensemble_temperature = CROSS_PERSON_ROBUST_SELECTION_ENSEMBLE_TEMPERATURE
+    return args
 
 
 def _add_model_args(parser: argparse.ArgumentParser, *, include_transfer_direction: bool = True) -> None:
@@ -317,6 +370,12 @@ def _build_cross_subject_smoke_parser(prog: str | None = None) -> argparse.Argum
         default=DEFAULT_CROSS_SUBJECT_TRIAL_SELECTION_SEED,
         help="Seed for random trial selection; ignored with --trial-selection first.",
     )
+    parser.add_argument(
+        "--training-sample-weighting",
+        choices=TRAINING_SAMPLE_WEIGHTING_MODES,
+        default=DEFAULT_CROSS_SUBJECT_TRAINING_SAMPLE_WEIGHTING,
+        help="Optional training-row weighting across source participants: none, subject_balanced, or subject_class_balanced.",
+    )
     parser.add_argument("--chance-classes", type=int, default=DEFAULT_CROSS_SUBJECT_CHANCE_CLASSES, help="Number of stimulus classes used for chance level.")
     parser.add_argument("--random-state", type=int, default=0, help="Random state passed to the classifier.")
     parser.add_argument("--signflip-permutations", type=int, default=10000, help="Monte Carlo sign-flip permutations for the group summary.")
@@ -350,6 +409,7 @@ def stimulus_cross_subject_smoke(argv: Sequence[str] | None = None, prog: str | 
         max_trials_per_class_per_participant=args.max_trials_per_class_per_participant,
         trial_selection=args.trial_selection,
         trial_selection_seed=args.trial_selection_seed,
+        training_sample_weighting=args.training_sample_weighting,
         chance_classes=args.chance_classes,
         random_state=args.random_state,
         signflip_permutations=args.signflip_permutations,
@@ -460,6 +520,12 @@ def _build_cross_subject_cue_calibrated_parser(prog: str | None = None) -> argpa
         action="store_true",
         help="Shuffle held-out participant cue labels before fitting that participant's calibration transform.",
     )
+    parser.add_argument(
+        "--training-sample-weighting",
+        choices=TRAINING_SAMPLE_WEIGHTING_MODES,
+        default=DEFAULT_CROSS_SUBJECT_TRAINING_SAMPLE_WEIGHTING,
+        help="Optional training-row weighting across source participants for the main-task classifier.",
+    )
     parser.add_argument("--target-calibration-label-shuffle-seed", type=int, default=0, help="Seed for the target cue-label shuffle control.")
     parser.add_argument("--outer-output", default="outputs/stimulus_cross_subject_cue_calibrated_outer.csv", help="Held-out participant score CSV.")
     parser.add_argument("--summary-output", default="outputs/stimulus_cross_subject_cue_calibrated_group_summary.csv", help="Group summary CSV.")
@@ -489,6 +555,7 @@ def stimulus_cross_subject_cue_calibrated(argv: Sequence[str] | None = None, pro
         classifier_param=parse_classifier_param(args.classifier_param),
         components_pca=args.components_pca,
         max_trials_per_class_per_participant=args.max_trials_per_class_per_participant,
+        training_sample_weighting=args.training_sample_weighting,
         chance_classes=args.chance_classes,
         random_state=args.random_state,
         signflip_permutations=args.signflip_permutations,
@@ -544,12 +611,26 @@ def _build_cross_subject_nested_parser(prog: str | None = None) -> argparse.Argu
         help="Optional held-out participant ids to evaluate in this run. Defaults to all participants.",
     )
     parser.add_argument(
+        "--cross-person-robust-preset",
+        action="store_true",
+        help="Use a broad nested LOSO grid with top-5 row-z-softmax score ensembling. The held-out outer participant is still excluded from model selection.",
+    )
+    parser.add_argument(
         "--window-centers",
         type=parse_float_list,
         default=DEFAULT_CROSS_SUBJECT_NESTED_WINDOW_CENTERS,
         help="Comma-separated candidate window centers in seconds.",
     )
     parser.add_argument("--window-size", type=float, default=DEFAULT_CROSS_SUBJECT_WINDOW_SIZE, help="Candidate window size in seconds.")
+    parser.add_argument(
+        "--window-jitter-offsets",
+        type=parse_float_list,
+        default=DEFAULT_CROSS_SUBJECT_WINDOW_JITTER_OFFSETS,
+        help=(
+            "Comma-separated additional window-center offsets in seconds for latency-jitter score averaging. "
+            "Use e.g. --window-jitter-offsets=-0.025,0,0.025. The held-out participant remains label-untouched."
+        ),
+    )
     parser.add_argument("--baseline-window", type=_parse_time_window, default=DEFAULT_CROSS_SUBJECT_BASELINE_WINDOW, help="Baseline window as start,stop in seconds.")
     parser.add_argument(
         "--feature-modes",
@@ -569,8 +650,12 @@ def _build_cross_subject_nested_parser(prog: str | None = None) -> argparse.Argu
     parser.add_argument(
         "--alignments",
         type=_parse_alignment_list,
-        default=(DEFAULT_CROSS_SUBJECT_ALIGNMENT,),
-        help="Comma-separated cross-subject training alignment modes.",
+        default=DEFAULT_CROSS_SUBJECT_NESTED_ALIGNMENTS,
+        help=(
+            "Comma-separated cross-subject training alignment modes. Defaults to "
+            "none,train_class_procrustes so nested LOSO selects between plain "
+            "pooling and train-only class Procrustes hyperalignment."
+        ),
     )
     parser.add_argument(
         "--classifiers",
@@ -607,6 +692,12 @@ def _build_cross_subject_nested_parser(prog: str | None = None) -> argparse.Argu
         type=int,
         default=DEFAULT_CROSS_SUBJECT_TRIAL_SELECTION_SEED,
         help="Seed for random trial selection; ignored with --trial-selection first.",
+    )
+    parser.add_argument(
+        "--training-sample-weighting",
+        choices=TRAINING_SAMPLE_WEIGHTING_MODES,
+        default=DEFAULT_CROSS_SUBJECT_TRAINING_SAMPLE_WEIGHTING,
+        help="Optional training-row weighting across source participants: none, subject_balanced, or subject_class_balanced.",
     )
     parser.add_argument(
         "--selection-ensemble-size",
@@ -664,6 +755,7 @@ def _build_cross_subject_nested_parser(prog: str | None = None) -> argparse.Argu
 def stimulus_cross_subject_nested(argv: Sequence[str] | None = None, prog: str | None = None) -> int:
     parser = _build_cross_subject_nested_parser(prog=prog)
     args = parser.parse_args(normalize_argv(argv))
+    args = _apply_cross_person_robust_nested_preset(args)
     data_folder = resolve_data_folder(args.data_folder)
     participants = parse_participant_spec(args.participants)
     if not participants:
@@ -672,6 +764,7 @@ def stimulus_cross_subject_nested(argv: Sequence[str] | None = None, prog: str |
     candidate_configs = make_cross_subject_candidate_configs(
         window_centers=args.window_centers,
         window_size=args.window_size,
+        window_jitter_offsets=args.window_jitter_offsets,
         baseline_window=args.baseline_window,
         feature_modes=args.feature_modes,
         normalizations=args.normalizations,
@@ -682,6 +775,7 @@ def stimulus_cross_subject_nested(argv: Sequence[str] | None = None, prog: str |
         max_trials_per_class_per_participant=args.max_trials_per_class_per_participant,
         trial_selection=args.trial_selection,
         trial_selection_seed=args.trial_selection_seed,
+        training_sample_weighting=args.training_sample_weighting,
         chance_classes=args.chance_classes,
         random_state=args.random_state,
         signflip_permutations=args.signflip_permutations,

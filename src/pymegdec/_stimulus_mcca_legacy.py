@@ -8,9 +8,9 @@ from dataclasses import dataclass
 from math import comb
 
 import numpy as np
-from reptrace.decoding.mcca import CLASS_ALIGNMENT_SAMPLE_MODES, fit_class_mcca
-from reptrace.decoding.mcca_target import class_alignment_matrix, fit_target_mcca_projection
-from reptrace.decoding.windowed import fit_window_model, predict_window_model, transform_window_features
+from neureptrace.decoding.mcca import CLASS_ALIGNMENT_SAMPLE_MODES, fit_class_mcca
+from neureptrace.decoding.mcca_target import class_alignment_matrix, fit_target_mcca_projection
+from neureptrace.decoding.windowed import fit_window_model, predict_window_model, transform_window_features
 from sklearn.metrics import accuracy_score, balanced_accuracy_score
 
 from pymegdec.alignment_window import (
@@ -43,6 +43,7 @@ from pymegdec.stimulus_cross_subject import (
 )
 
 TARGET_CENTERING_MODES = ("group_mean", "target_unsupervised")
+DEFAULT_TARGET_CENTERING = "group_mean"
 ALIGNMENT_DATASETS = ("main", "cue")
 
 
@@ -69,7 +70,7 @@ class CrossSubjectMCCAConfig:  # pylint: disable=too-many-instance-attributes
     mcca_subject_pca_components: int | float | None = None
     mcca_sample_mode: str = "class_repetition"
     mcca_repetitions_per_class: int | None = None
-    target_centering: str = "target_unsupervised"
+    target_centering: str = DEFAULT_TARGET_CENTERING
     target_calibration_trials_per_class: int = 0
     target_projection_regularization: float | None = None
 
@@ -390,6 +391,8 @@ def _meta(config):
         "mcca_regularization": config.mcca_regularization,
         "mcca_subject_pca_components": config.mcca_subject_pca_components,
         "target_centering": config.target_centering,
+        "evaluation_regime": _evaluation_regime(config),
+        "target_adaptation": _target_adaptation_label(config),
         "target_calibration_trials_per_class": config.target_calibration_trials_per_class,
         "target_projection_regularization": _target_projection_regularization(config),
         "classifier": config.classifier,
@@ -467,12 +470,14 @@ def _rank_metrics(scores, classes, y_true):
     top2, top3, ranks, rows = [], [], [], []
     for i, truth in enumerate(y_true):
         ranked = classes[order[i]]
-        top2.append(truth in ranked[:2])
-        top3.append(truth in ranked[:3])
+        top2_hit = bool(truth in ranked[:2])
+        top3_hit = bool(truth in ranked[:3])
+        top2.append(top2_hit)
+        top3.append(top3_hit)
         match = np.flatnonzero(ranked == truth)
         rank = int(match[0]) + 1 if match.size else np.nan
         ranks.append(rank)
-        row = {"true_label_rank": rank, "true_label_score": np.nan}
+        row = {"true_label_rank": rank, "true_label_score": np.nan, "top2_correct": top2_hit, "top3_correct": top3_hit}
         true_index = np.flatnonzero(classes == truth)
         if true_index.size:
             row["true_label_score"] = float(scores[i, true_index[0]])
@@ -522,6 +527,26 @@ def _alignment_label(config):
     if config.target_calibration_trials_per_class > 0:
         return "mcca_target_calibrated"
     return "mcca_group_projection"
+
+
+def _evaluation_regime(config):
+    if _alignment_data(config) == "cue":
+        return "cue_calibrated"
+    if config.target_calibration_trials_per_class > 0:
+        return "labeled_target_calibration"
+    if config.target_centering == "target_unsupervised":
+        return "unsupervised_target_adaptation"
+    return "strict_loso"
+
+
+def _target_adaptation_label(config):
+    if _alignment_data(config) == "cue":
+        return "independent_cue_file_target_projection"
+    if config.target_calibration_trials_per_class > 0:
+        return "labeled_target_trials_excluded_from_scoring"
+    if config.target_centering == "target_unsupervised":
+        return "held_out_unlabeled_feature_mean"
+    return "none"
 
 
 def _alignment_data(config):
@@ -637,7 +662,15 @@ def _parser(prog=None):
     parser.add_argument("--mcca-subject-pca-components", type=_optional_int, default=None)
     parser.add_argument("--mcca-sample-mode", choices=CLASS_ALIGNMENT_SAMPLE_MODES, default="class_repetition")
     parser.add_argument("--mcca-repetitions-per-class", type=int, default=None)
-    parser.add_argument("--target-centering", choices=TARGET_CENTERING_MODES, default="target_unsupervised")
+    parser.add_argument(
+        "--target-centering",
+        choices=TARGET_CENTERING_MODES,
+        default=DEFAULT_TARGET_CENTERING,
+        help=(
+            "Centering used with the calibration-free group projection. group_mean is the strict LOSO default; "
+            "target_unsupervised uses the held-out participant's unlabeled feature mean and is reported as unsupervised target adaptation."
+        ),
+    )
     parser.add_argument(
         "--target-calibration-trials-per-class",
         type=int,

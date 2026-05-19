@@ -1,6 +1,7 @@
 import re
 import tempfile
 import unittest
+from argparse import Namespace
 from pathlib import Path
 from unittest.mock import patch
 
@@ -20,6 +21,7 @@ from pymegdec.stimulus_cross_subject import (
     make_cross_subject_candidate_configs,
     summarize_cross_subject_stimulus_smoke,
 )
+from pymegdec.stimulus_cli import _apply_cross_person_robust_nested_preset
 from tests.matlab_fixtures import cell_array
 
 
@@ -419,6 +421,37 @@ class TestStimulusCrossSubject(unittest.TestCase):
         )
 
         self.assertEqual(tuple(config.components_pca for config in candidate_configs), (32, 64, 128, 256))
+
+    def test_cross_person_robust_preset_expands_nested_grid_and_topk(self):
+        args = Namespace(
+            cross_person_robust_preset=True,
+            window_centers=(0.175,),
+            feature_modes=("sensor_mean",),
+            normalizations=("none",),
+            alignments=("none",),
+            classifiers=("multiclass-svm",),
+            classifier_params=(float("nan"),),
+            components_pca_values=(64,),
+            selection_ensemble_size=1,
+            selection_ensemble_diversity="none",
+            selection_ensemble_score_normalization="rank_softmax",
+            selection_ensemble_weighting="inner_softmax",
+            selection_ensemble_temperature=0.5,
+        )
+
+        updated = _apply_cross_person_robust_nested_preset(args)
+
+        self.assertEqual(updated.window_centers, (0.100, 0.125, 0.150, 0.175, 0.200, 0.225, 0.250, 0.275))
+        self.assertIn("sensor_flat", updated.feature_modes)
+        self.assertIn("subject_baseline_whiten", updated.normalizations)
+        self.assertIn("train_class_procrustes", updated.alignments)
+        self.assertIn("multiclass-svm-weighted", updated.classifiers)
+        self.assertEqual(updated.classifier_params, (AUTO_CLASSIFIER_PARAM_GRID_TOKEN,))
+        self.assertEqual(updated.components_pca_values, (16, AUTO_COMPONENTS_PCA_GRID_TOKEN))
+        self.assertEqual(updated.selection_ensemble_size, 5)
+        self.assertEqual(updated.selection_ensemble_diversity, "window_classifier")
+        self.assertEqual(updated.selection_ensemble_score_normalization, "row_z_softmax")
+        self.assertEqual(updated.selection_ensemble_temperature, 0.02)
 
     def test_rich_time_feature_preset_expands_for_nested_candidate_grid(self):
         candidate_configs = make_cross_subject_candidate_configs(

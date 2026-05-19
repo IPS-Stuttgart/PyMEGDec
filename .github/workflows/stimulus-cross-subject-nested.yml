@@ -46,6 +46,11 @@ on:
         default: screening
         type: choice
         options: [screening, final-all-trials]
+      cross_person_robust_preset:
+        description: Use the broad nested LOSO + top-K score-ensemble preset for cross-person transfer. Overrides grid/ensemble inputs below.
+        required: true
+        default: false
+        type: boolean
       participants:
         description: Participant ids such as 1-4,6,8.
         required: true
@@ -170,6 +175,7 @@ jobs:
       DATA_CACHE_VERSION: ${{ inputs.data_cache_version }}
       PARTICIPANTS: ${{ inputs.participants }}
       OUTER_PARTICIPANTS: ${{ inputs.outer_participants }}
+      CROSS_PERSON_ROBUST_PRESET: ${{ inputs.cross_person_robust_preset }}
       WINDOW_CENTERS: ${{ inputs.window_centers }}
       WINDOW_SIZE: ${{ inputs.window_size }}
       BASELINE_WINDOW: ${{ inputs.baseline_window }}
@@ -254,6 +260,7 @@ jobs:
           fi
           echo "Nested benchmark preset: ${BENCHMARK_PRESET}"
           echo "Effective trial cap per class/participant: ${effective_trial_cap:-all trials}"
+          echo "Cross-person robust nested preset: ${CROSS_PERSON_ROBUST_PRESET}"
           echo "Output prefix: ${output_prefix}"
           args=(
             python scripts/export_stimulus_cross_subject_nested.py
@@ -285,6 +292,9 @@ jobs:
           )
           if [[ "${LABEL_SHUFFLE_CONTROL}" == "true" ]]; then
             args+=(--label-shuffle-control --label-shuffle-seed "${LABEL_SHUFFLE_SEED}")
+          fi
+          if [[ "${CROSS_PERSON_ROBUST_PRESET}" == "true" ]]; then
+            args+=(--cross-person-robust-preset)
           fi
           if [[ -n "${effective_trial_cap}" ]]; then
             args+=(--max-trials-per-class-per-participant "${effective_trial_cap}")
@@ -325,6 +335,7 @@ jobs:
           from pathlib import Path
 
           benchmark_preset = os.environ.get("BENCHMARK_PRESET", "screening")
+          cross_person_robust_preset = os.environ.get("CROSS_PERSON_ROBUST_PRESET", "false")
           output_prefix = "stimulus_cross_subject_nested"
           if benchmark_preset == "final-all-trials":
               output_prefix = f"{output_prefix}_final_all_trials"
@@ -376,6 +387,7 @@ jobs:
               "| metric | value |",
               "| --- | ---: |",
               f"| benchmark preset | {benchmark_preset} |",
+              f"| cross-person robust preset | {cross_person_robust_preset} |",
               f"| effective trial cap | {effective_trial_cap} |",
               f"| output prefix | `{output_prefix}` |",
               f"| outer folds | {summary['n_outer_folds']} |",

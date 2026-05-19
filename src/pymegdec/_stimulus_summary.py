@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import pymegdec._stimulus_decoding_core as _core
-from reptrace.results.tables import (  # pylint: disable=no-name-in-module
+from neureptrace.results.tables import (  # pylint: disable=no-name-in-module
     DEFAULT_CHANCE_CLASS_COLUMNS,
     DEFAULT_CHANCE_SUMMARY_COLUMNS,
     append_temporal_diagonal_flag,

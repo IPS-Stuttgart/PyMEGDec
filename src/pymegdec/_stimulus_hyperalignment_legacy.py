@@ -9,13 +9,13 @@ from dataclasses import dataclass
 from math import comb
 
 import numpy as np
-from reptrace.decoding.hyperalignment import (
+from neureptrace.decoding.hyperalignment import (
     CLASS_ALIGNMENT_SAMPLE_MODES,
     class_alignment_matrices,
     fit_class_hyperalignment,
     fit_projection_to_hyperalignment,
 )
-from reptrace.decoding.windowed import fit_window_model, predict_window_model, transform_window_features
+from neureptrace.decoding.windowed import fit_window_model, predict_window_model, transform_window_features
 from sklearn.metrics import accuracy_score, balanced_accuracy_score
 
 from pymegdec.alignment_window import (
@@ -50,7 +50,7 @@ from pymegdec.stimulus_cross_subject import (
 HYPERALIGNMENT_TARGET_CENTERING_MODES = ("group_mean", "target_unsupervised")
 DEFAULT_HYPERALIGNMENT_COMPONENTS = 64
 DEFAULT_HYPERALIGNMENT_SAMPLE_MODE = "class_repetition"
-DEFAULT_HYPERALIGNMENT_TARGET_CENTERING = "target_unsupervised"
+DEFAULT_HYPERALIGNMENT_TARGET_CENTERING = "group_mean"
 ALIGNMENT_DATASETS = ("main", "cue")
 
 
@@ -87,10 +87,14 @@ def evaluate_cross_subject_hyperalignment(data_folder, participants, *, config=N
     """Run fixed-pipeline LOSO stimulus decoding with Procrustes hyperalignment.
 
     With the default ``target_calibration_trials_per_class=0``, the held-out
-    participant is transformed by the average training-subject hyperalignment projection.
-    This is calibration-free with respect to target labels. Setting a positive
-    target-calibration count estimates a target-specific Procrustes projection from
-    those labeled target trials and excludes them from scoring.
+    participant is transformed by the average training-subject hyperalignment
+    projection and centered with source-group statistics. This is the strict LOSO
+    regime: no held-out main-task labels and no held-out main-task feature moments
+    are used for fitting or centering. Setting ``target_centering='target_unsupervised'``
+    permits unlabeled held-out feature centering and is reported as unsupervised
+    target adaptation. Setting a positive target-calibration count estimates a
+    target-specific Procrustes projection from those labeled target trials and
+    excludes them from scoring.
     """
 
     config = _normalized_hyperalignment_config(config or CrossSubjectHyperalignmentConfig())
@@ -250,6 +254,8 @@ def summarize_cross_subject_hyperalignment(outer_rows, *, config=None):
             "hyperalignment_repetitions_per_class": config.hyperalignment_repetitions_per_class,
             "target_calibration_trials_per_class": config.target_calibration_trials_per_class,
             "target_centering": config.target_centering,
+            "evaluation_regime": _evaluation_regime(config),
+            "target_adaptation": _target_adaptation_label(config),
             "classifier": config.classifier,
             "components_pca": config.components_pca,
             "max_trials_per_class_per_participant": config.max_trials_per_class_per_participant,
@@ -493,6 +499,8 @@ def _outer_row(  # pylint: disable=too-many-arguments
         "target_transform": target_transform,
         "target_calibration_trials_per_class": config.target_calibration_trials_per_class,
         "target_centering": config.target_centering,
+        "evaluation_regime": _evaluation_regime(config),
+        "target_adaptation": _target_adaptation_label(config),
         "classifier": config.classifier,
         "classifier_param": classifier_param,
         "components_pca": config.components_pca,
@@ -534,6 +542,7 @@ def _prediction_rows(  # pylint: disable=too-many-arguments
     ranks = _true_label_ranks(test_labels, class_scores, score_classes)
     rows = []
     for output_index, (trial_index, true_label, predicted_label, confidence_score) in enumerate(zip(trial_indices, test_labels, predictions, confidence_scores)):
+        true_label_rank = ranks[output_index]
         row = {
             "test_participant": int(test_set.participant),
             "trial_index": int(trial_index),
@@ -541,7 +550,9 @@ def _prediction_rows(  # pylint: disable=too-many-arguments
             "predicted_stimulus": int(predicted_label),
             "correct": bool(int(true_label) == int(predicted_label)),
             "stimulus_score": float(confidence_score),
-            "true_label_rank": ranks[output_index],
+            "true_label_rank": true_label_rank,
+            "top2_correct": bool(np.isfinite(true_label_rank) and true_label_rank <= 2),
+            "top3_correct": bool(np.isfinite(true_label_rank) and true_label_rank <= 3),
             "window_center_s": config.window_center,
             "window_size_s": config.window_size,
             "window_start_s": window[0],
@@ -559,6 +570,8 @@ def _prediction_rows(  # pylint: disable=too-many-arguments
             "target_transform": target_transform,
             "target_calibration_trials_per_class": config.target_calibration_trials_per_class,
             "target_centering": config.target_centering,
+            "evaluation_regime": _evaluation_regime(config),
+            "target_adaptation": _target_adaptation_label(config),
             "classifier": config.classifier,
             "components_pca": config.components_pca,
             "actual_components_pca": model_bundle.actual_components_pca,
@@ -803,6 +816,26 @@ def _alignment_label(config):
     return "class_hyperalignment_group_average"
 
 
+def _evaluation_regime(config):
+    if _alignment_data(config) == "cue":
+        return "cue_calibrated"
+    if config.target_calibration_trials_per_class > 0:
+        return "labeled_target_calibration"
+    if config.target_centering == "target_unsupervised":
+        return "unsupervised_target_adaptation"
+    return "strict_loso"
+
+
+def _target_adaptation_label(config):
+    if _alignment_data(config) == "cue":
+        return "independent_cue_file_target_projection"
+    if config.target_calibration_trials_per_class > 0:
+        return "labeled_target_trials_excluded_from_scoring"
+    if config.target_centering == "target_unsupervised":
+        return "held_out_unlabeled_feature_mean"
+    return "none"
+
+
 def _alignment_data(config):
     return str(config.alignment_data).strip().lower().replace("-", "_")
 
@@ -921,7 +954,12 @@ def _build_cross_subject_hyperalignment_parser(prog: str | None = None) -> argpa
         "--target-centering",
         choices=HYPERALIGNMENT_TARGET_CENTERING_MODES,
         default=DEFAULT_HYPERALIGNMENT_TARGET_CENTERING,
-        help="Centering used with the calibration-free group projection.",
+        help=(
+            "Centering used with the calibration-free group projection. "
+            "group_mean is the strict LOSO default and uses only source-group statistics; "
+            "target_unsupervised uses the held-out participant's unlabeled feature mean "
+            "and is reported as unsupervised target adaptation."
+        ),
     )
     parser.add_argument("--max-trials-per-class-per-participant", type=int, default=None, help="Optional deterministic cap on trials per stimulus class and participant.")
     parser.add_argument("--chance-classes", type=int, default=DEFAULT_CROSS_SUBJECT_CHANCE_CLASSES, help="Number of stimulus classes used for chance level.")
