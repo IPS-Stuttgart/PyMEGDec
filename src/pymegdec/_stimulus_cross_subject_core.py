@@ -234,7 +234,7 @@ def make_cross_subject_candidate_configs(  # pylint: disable=too-many-arguments
 
 
 def _components_pca_values_for_grid(components_pca_values):
-    values = []
+    values: list[object] = []
     for components_pca in components_pca_values:
         if _is_auto_components_pca_grid(components_pca):
             values.extend(COMPONENTS_PCA_AUTO_GRID)
@@ -250,7 +250,7 @@ def _is_auto_components_pca_grid(value):
 def _classifier_params_for_classifier(classifier, classifier_params):
     """Expand classifier-specific parameter grids while preserving explicit values."""
 
-    params = []
+    params: list[object] = []
     for classifier_param in classifier_params:
         if _is_auto_classifier_param_grid(classifier_param):
             params.extend(CLASSIFIER_AUTO_PARAM_GRIDS.get(str(classifier), (float("nan"),)))

@@ -2273,7 +2273,7 @@ def _format_float_mapping(items):
 
 
 def _row_semicolon_value_counts(rows, key):
-    counter = Counter()
+    counter: Counter[str] = Counter()
     for row in rows:
         value = row.get(key)
         if value in (None, ""):
