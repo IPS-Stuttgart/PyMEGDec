@@ -11,6 +11,7 @@ from typing import Any
 
 import numpy as np
 from sklearn.linear_model import LogisticRegression
+from sklearn.naive_bayes import GaussianNB
 
 from reptrace.decoding.classifiers import (
     ClassifierSpec,
@@ -46,6 +47,7 @@ _DecodedLabelClassifier = DecodedLabelClassifier
 _encode_classifier_labels = encode_classifier_labels
 
 PYMEGDEC_DEFAULT_CLASSIFIER_PARAMS = {
+    "gaussian-naive-bayes": 1e-9,
     "multinomial-logistic-weighted": 1.0,
     "shrinkage-prototype": 0.25,
 }
@@ -62,6 +64,10 @@ def _build_weighted_multinomial_logistic(_features, _labels, classifier_param, r
         max_iter=1000,
         random_state=random_state,
     )
+
+
+def _build_gaussian_naive_bayes(_features, _labels, classifier_param, _random_state):
+    return GaussianNB(var_smoothing=float(classifier_param))
 
 
 class ShrinkagePrototypeClassifier:
@@ -121,6 +127,7 @@ def _build_shrinkage_prototype(_features, _labels, classifier_param, _random_sta
 
 CLASSIFIER_REGISTRY = {
     **REPTRACE_CLASSIFIER_REGISTRY,
+    "gaussian-naive-bayes": ClassifierSpec(_build_gaussian_naive_bayes),
     "multinomial-logistic-weighted": ClassifierSpec(_build_weighted_multinomial_logistic),
     "shrinkage-prototype": ClassifierSpec(_build_shrinkage_prototype),
 }

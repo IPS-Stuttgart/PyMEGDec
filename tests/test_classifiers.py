@@ -70,15 +70,39 @@ class TestClassifiers(unittest.TestCase):
         import pymegdec.classifiers as classifiers
 
         self.assertIs(classifiers.train_multiclass_classifier, train_multiclass_classifier)
+        self.assertIn("gaussian-naive-bayes", classifiers.CLASSIFIER_REGISTRY)
         self.assertIn("multinomial-logistic-weighted", classifiers.CLASSIFIER_REGISTRY)
         self.assertIn("shrinkage-prototype", classifiers.CLASSIFIER_REGISTRY)
 
     def test_default_params_for_cross_subject_baseline_classifiers(self):
         self.assertIsNone(get_default_classifier_param("correlation-prototype"))
+        self.assertEqual(get_default_classifier_param("gaussian-naive-bayes"), 1e-9)
         self.assertEqual(get_default_classifier_param("multinomial-logistic"), 1.0)
         self.assertEqual(get_default_classifier_param("multinomial-logistic-weighted"), 1.0)
         self.assertEqual(get_default_classifier_param("shrinkage-prototype"), 0.25)
         self.assertIsNone(get_default_classifier_param("shrinkage-lda"))
+
+    def test_gaussian_naive_bayes_trains_and_predicts_probabilities(self):
+        features = np.asarray(
+            [
+                [0.0, 0.0],
+                [0.0, 0.1],
+                [1.0, 1.0],
+                [1.1, 1.0],
+                [2.0, 0.0],
+                [2.0, 0.1],
+            ],
+            dtype=float,
+        )
+        labels = np.asarray([0, 0, 1, 1, 2, 2], dtype=int)
+
+        model = train_multiclass_classifier(features, labels, "gaussian-naive-bayes", 1e-8)
+        probabilities = model.predict_proba(features[:3])
+
+        self.assertIn("gaussian-naive-bayes", CLASSIFIER_REGISTRY)
+        self.assertEqual(model.model.var_smoothing, 1e-8)
+        self.assertEqual(probabilities.shape, (3, 3))
+        np.testing.assert_allclose(np.sum(probabilities, axis=1), np.ones(3))
 
     def test_weighted_multinomial_logistic_trains(self):
         features = np.asarray(
