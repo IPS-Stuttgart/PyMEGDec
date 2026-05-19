@@ -7,7 +7,8 @@ from unittest.mock import patch
 
 import numpy as np
 from pymegdec.cli import parse_classifier_param
-from reptrace.decoding.classifiers import (
+from pymegdec.classifiers import (
+    CLASSIFIER_REGISTRY,
     get_default_classifier_param,
     train_multiclass_classifier,
 )
@@ -65,15 +66,36 @@ class TestClassifiers(unittest.TestCase):
         np.testing.assert_array_equal(model.predict(self.features[:2]), np.asarray([10, 20], dtype=int))
         np.testing.assert_allclose(model.decision_function(self.features[:2]), np.asarray([[-0.25, 0.25], [0.50, -0.50]], dtype=float))
 
-    def test_pymegdec_classifier_module_is_compatibility_shim(self):
+    def test_pymegdec_classifier_module_extends_upstream_registry(self):
         import pymegdec.classifiers as classifiers
 
         self.assertIs(classifiers.train_multiclass_classifier, train_multiclass_classifier)
+        self.assertIn("multinomial-logistic-weighted", classifiers.CLASSIFIER_REGISTRY)
 
     def test_default_params_for_cross_subject_baseline_classifiers(self):
         self.assertIsNone(get_default_classifier_param("correlation-prototype"))
         self.assertEqual(get_default_classifier_param("multinomial-logistic"), 1.0)
+        self.assertEqual(get_default_classifier_param("multinomial-logistic-weighted"), 1.0)
         self.assertIsNone(get_default_classifier_param("shrinkage-lda"))
+
+    def test_weighted_multinomial_logistic_trains(self):
+        features = np.asarray(
+            [
+                [0.0, 0.0],
+                [0.0, 0.2],
+                [0.1, 0.0],
+                [1.0, 1.0],
+                [2.0, 2.0],
+            ],
+            dtype=float,
+        )
+        labels = np.asarray([0, 0, 0, 1, 2], dtype=int)
+
+        model = train_multiclass_classifier(features, labels, "multinomial-logistic-weighted", 1.0, random_state=13)
+
+        self.assertIn("multinomial-logistic-weighted", CLASSIFIER_REGISTRY)
+        self.assertEqual(model.model.class_weight, "balanced")
+        self.assertEqual(len(model.predict(features)), len(labels))
 
     def test_parse_classifier_param_accepts_auto(self):
         self.assertEqual(parse_classifier_param("auto"), "auto")
