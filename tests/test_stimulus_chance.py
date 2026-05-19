@@ -3,6 +3,10 @@ from unittest.mock import patch
 
 import numpy as np
 from pymegdec import _stimulus_decoding_core as stimulus_core
+from pymegdec.stimulus_cli import (
+    _base_config,
+    _build_predictions_parser,
+)
 from pymegdec.stimulus_decoding import (
     DEFAULT_CHANCE_CLASSES,
     StimulusDecodingConfig,
@@ -113,6 +117,24 @@ class TestStimulusChanceLevel(unittest.TestCase):
         self.assertEqual(row["n_validation_classes"], 2)
         self.assertEqual(row["chance_accuracy"], 1.0 / DEFAULT_CHANCE_CLASSES)
         self.assertEqual(row["chance_percent"], 100.0 / DEFAULT_CHANCE_CLASSES)
+
+    def test_cli_omitted_chance_classes_keeps_auto_inference(self):
+        parser = _build_predictions_parser()
+        args = parser.parse_args([])
+
+        config = _base_config(args, window_centers=(0.0,))
+
+        self.assertIsNone(config.chance_classes)
+        self.assertTrue(config.infer_chance_classes)
+
+    def test_cli_explicit_sixteen_chance_classes_disables_inference(self):
+        parser = _build_predictions_parser()
+        args = parser.parse_args(["--chance-classes", str(DEFAULT_CHANCE_CLASSES)])
+
+        config = _base_config(args, window_centers=(0.0,))
+
+        self.assertEqual(config.chance_classes, DEFAULT_CHANCE_CLASSES)
+        self.assertFalse(config.infer_chance_classes)
 
 
 if __name__ == "__main__":

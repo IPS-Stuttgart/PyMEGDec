@@ -165,7 +165,15 @@ def _add_model_args(parser: argparse.ArgumentParser, *, include_transfer_directi
     parser.add_argument("--classifier-param", default=None, help="Classifier parameter value, JSON, Python literal, numeric value, or nan.")
     parser.add_argument("--components-pca", type=parse_int_or_inf, default=100, help="Number of PCA components, or inf.")
     parser.add_argument("--frequency-range", type=parse_float_or_inf, nargs=2, metavar=("LOW", "HIGH"), default=(0.0, float("inf")), help="Frequency range in Hz.")
-    parser.add_argument("--chance-classes", type=int, default=16, help="Number of stimulus classes used for chance level.")
+    parser.add_argument(
+        "--chance-classes",
+        type=int,
+        default=None,
+        help=(
+            "Fixed number of stimulus classes used for the chance level. "
+            "Omit to infer chance from the validation labels."
+        ),
+    )
 
 
 def _base_config(args: argparse.Namespace, *, window_centers: tuple[float, ...], transfer_direction: str | None = None) -> StimulusDecodingConfig:
@@ -179,6 +187,7 @@ def _base_config(args: argparse.Namespace, *, window_centers: tuple[float, ...],
         components_pca=args.components_pca,
         frequency_range=tuple(args.frequency_range),
         chance_classes=args.chance_classes,
+        infer_chance_classes=args.chance_classes is None,
         permutations=0,
         transfer_direction=transfer_direction or args.transfer_direction,
     )

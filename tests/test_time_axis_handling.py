@@ -38,7 +38,7 @@ def _loadmat_side_effect(data_by_participant):
 
 
 class TestTimeAxisHandling(unittest.TestCase):
-    def test_extract_windows_uses_each_trial_time_vector(self):
+    def test_extract_windows_uses_each_trial_time_vector_with_half_open_windows(self):
         first_time = np.array([[-0.2, -0.1, 0.0, 0.1, 0.2]])
         second_time = np.array([[-0.3, -0.2, -0.1, 0.0, 0.1, 0.2]])
         first_trial = np.array([[0, 1, 2, 3, 4]], dtype=float)
@@ -47,8 +47,8 @@ class TestTimeAxisHandling(unittest.TestCase):
 
         stimuli, null = extract_windows(data, (-0.1, 0.1), (np.nan, np.nan))
 
-        np.testing.assert_array_equal(stimuli[0].ravel(), [1, 2, 3])
-        np.testing.assert_array_equal(stimuli[1].ravel(), [12, 13, 14])
+        np.testing.assert_array_equal(stimuli[0].ravel(), [1, 2])
+        np.testing.assert_array_equal(stimuli[1].ravel(), [12, 13])
         self.assertEqual(null, [])
 
     def test_downsample_uses_each_trial_time_support_without_extrapolation(self):

@@ -21,7 +21,7 @@ def _structured_data(trials, times):
 
 
 class TestPreprocessing(unittest.TestCase):
-    def test_extract_windows_uses_inclusive_matlab_column_order(self):
+    def test_extract_windows_uses_half_open_sample_count_column_order(self):
         time = np.array([[-0.4, -0.3, -0.2, -0.1, 0.0, 0.1, 0.2]])
         trial = np.array(
             [
@@ -33,8 +33,30 @@ class TestPreprocessing(unittest.TestCase):
 
         stimuli, null = extract_windows(data, (-0.1, 0.1), (-0.4, -0.2))
 
-        np.testing.assert_array_equal(stimuli[0].ravel(), [4, 14, 5, 15, 6, 16])
-        np.testing.assert_array_equal(null[0].ravel(), [1, 11, 2, 12, 3, 13])
+        np.testing.assert_array_equal(stimuli[0].ravel(), [4, 14, 5, 15])
+        np.testing.assert_array_equal(null[0].ravel(), [1, 11, 2, 12])
+
+    def test_extract_windows_uses_nominal_duration_not_inclusive_endpoint(self):
+        time = np.round(np.arange(-0.1, 0.101, 0.001), 6)[None, :]
+        trial = np.arange(time.size, dtype=float)[None, :]
+        data = _data([trial], [time])
+
+        stimuli, null = extract_windows(data, (0.0, 0.1), (np.nan, np.nan))
+
+        self.assertEqual(null, [])
+        self.assertEqual(stimuli[0].shape, (100, 1))
+        selected_indices = stimuli[0].ravel().astype(int)
+        selected_times = time.ravel()[selected_indices]
+        self.assertAlmostEqual(selected_times[0], 0.0)
+        self.assertAlmostEqual(selected_times[-1], 0.099)
+
+    def test_extract_windows_rejects_non_integer_sample_duration(self):
+        time = np.array([[-0.4, -0.3, -0.2, -0.1, 0.0, 0.1, 0.2]])
+        trial = np.arange(time.size, dtype=float)[None, :]
+        data = _data([trial], [time])
+
+        with self.assertRaisesRegex(ValueError, "integer multiple"):
+            extract_windows(data, (-0.1, 0.05), (np.nan, np.nan))
 
     def test_preprocess_features_rejects_touching_null_train_windows(self):
         time = np.array([[-0.3, -0.2, -0.1, 0.0, 0.1]])
@@ -55,7 +77,7 @@ class TestPreprocessing(unittest.TestCase):
         data = _data([trial], [time])
 
         with self.assertRaisesRegex(ValueError, "overlap"):
-            extract_windows(data, (-0.1, 0.1), (-0.25, -0.11))
+            extract_windows(data, (-0.1, 0.1), (-0.12, -0.11))
 
     def test_downsample_returns_new_data_without_mutating_input(self):
         time = np.array([[0.0, 0.25, 0.5, 0.75, 1.0]])
@@ -89,6 +111,25 @@ class TestPreprocessing(unittest.TestCase):
         np.testing.assert_allclose(
             downsampled["trial"][0][0][0],
             [[1.0, 3.0, 5.0], [10.0, 14.0, 18.0]],
+            atol=0.06,
+        )
+
+    def test_downsample_lowpasses_before_decimation(self):
+        raw_framerate = 200
+        new_framerate = 50
+        time = np.arange(0.0, 1.0, 1.0 / raw_framerate)[None, :]
+        low_frequency = np.sin(2 * np.pi * 5 * time.ravel())
+        above_new_nyquist = np.sin(2 * np.pi * 70 * time.ravel())
+        data = _data([np.array([low_frequency + above_new_nyquist])], [time.copy()])
+
+        downsampled = downsample_data(data, new_framerate)
+
+        new_time = downsampled["time"][0][0][0].ravel()
+        expected_low_frequency = np.sin(2 * np.pi * 5 * new_time)
+        np.testing.assert_allclose(
+            downsampled["trial"][0][0][0][0, 5:-5],
+            expected_low_frequency[5:-5],
+            atol=0.05,
         )
 
     def test_downsample_does_not_mutate_scipy_loaded_struct_arrays(self):

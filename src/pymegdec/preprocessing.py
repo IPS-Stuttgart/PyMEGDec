@@ -7,6 +7,10 @@ from scipy.interpolate import interp1d
 from scipy.signal import butter, filtfilt
 
 
+_ANTI_ALIAS_FILTER_ORDER = 4
+_ANTI_ALIAS_CUTOFF_FRACTION = 0.95
+
+
 def preprocess_features(
     data,
     frequency_range,
@@ -100,8 +104,11 @@ def _downsample_data_inplace(data, new_framerate):
         raise ValueError("New framerate must be positive.")
 
     sample_interval = _common_uniform_sample_interval(data)
-    raw_fs = round(float(1 / sample_interval))
+    sample_rate = float(1 / sample_interval)
+    raw_fs = round(sample_rate)
     if new_framerate != raw_fs:
+        if new_framerate < sample_rate:
+            data = _anti_alias_filter_for_downsampling_inplace(data, sample_rate, new_framerate)
         step = 1 / new_framerate
         for i in range(_trial_count(data)):
             trial, time = _trial_and_time(data, i)
@@ -115,6 +122,28 @@ def _downsample_data_inplace(data, new_framerate):
             data["trial"][0][0][i] = interpolator(new_t)
             data["time"][0][0][i] = new_t[None]
     return data
+
+
+def _anti_alias_filter_for_downsampling_inplace(data, sample_rate, new_framerate):
+    """Low-pass filter trials before reducing the sample rate."""
+
+    old_nyquist = sample_rate / 2
+    cutoff = _ANTI_ALIAS_CUTOFF_FRACTION * new_framerate / 2
+    if cutoff >= old_nyquist:
+        return data
+
+    b, a = butter(_ANTI_ALIAS_FILTER_ORDER, cutoff / old_nyquist, "low")
+    for i in range(_trial_count(data)):
+        trial, _time = _trial_and_time(data, i)
+        padlen = _safe_filtfilt_padlen(trial.shape[1], b, a)
+        data["trial"][0][0][i] = filtfilt(b, a, trial, axis=1, padlen=padlen)
+    return data
+
+
+def _safe_filtfilt_padlen(n_samples, b, a):
+    if n_samples < 2:
+        raise ValueError("Cannot anti-alias filter a trial with fewer than two samples.")
+    return min(3 * max(len(a), len(b)), n_samples - 1)
 
 
 def extract_windows(data, train_window, null_time_window):
@@ -241,18 +270,49 @@ def _regular_time_grid_within_support(time, step):
 def _nearest_window_slice(time, time_window, trial_idx, window_name):
     start, stop = time_window
     _require_window_supported(time, start, stop, trial_idx, window_name)
-    begin_index = int(np.argmin(np.abs(time - start)))
-    end_index = int(np.argmin(np.abs(time - stop)))
-    if end_index < begin_index:
+    sample_interval = _uniform_sample_interval(time, trial_idx)
+    sample_count = _half_open_window_sample_count(
+        start,
+        stop,
+        sample_interval,
+        trial_idx,
+        window_name,
+    )
+    begin_index = _nearest_time_index(time, start)
+    end_index = begin_index + sample_count
+    if end_index > time.size:
+        raise ValueError(f"{window_name.capitalize()} window extends beyond trial {trial_idx}'s time support.")
+    return slice(begin_index, end_index)
+
+
+def _half_open_window_sample_count(start, stop, sample_interval, trial_idx, window_name):
+    duration = float(stop - start)
+    if duration < 0:
         raise ValueError(f"{window_name.capitalize()} window is empty for trial {trial_idx}.")
-    return slice(begin_index, end_index + 1)
+    if np.isclose(duration, 0.0, rtol=0.0, atol=1e-12):
+        return 1
+
+    sample_count_float = duration / float(sample_interval)
+    sample_count = int(np.rint(sample_count_float))
+    if sample_count <= 0:
+        raise ValueError(f"{window_name.capitalize()} window is empty for trial {trial_idx}.")
+    if not np.isclose(sample_count_float, sample_count, rtol=1e-7, atol=1e-7):
+        raise ValueError(
+            f"{window_name.capitalize()} window duration for trial {trial_idx} is not an integer "
+            "multiple of the sample interval."
+        )
+    return sample_count
+
+
+def _nearest_time_index(time, value):
+    return int(np.argmin(np.abs(time - value)))
 
 
 def _matching_sample_window_slice(time, start, sample_count, trial_idx, window_name):
     if sample_count <= 0:
         raise ValueError(f"{window_name.capitalize()} window sample count must be positive.")
     _require_time_supported(time, start, trial_idx, window_name)
-    begin_index = int(np.argmin(np.abs(time - start)))
+    begin_index = _nearest_time_index(time, start)
     end_index = begin_index + int(sample_count)
     if end_index > time.size:
         raise ValueError(f"{window_name.capitalize()} window extends beyond trial {trial_idx}'s time support.")
