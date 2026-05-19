@@ -89,10 +89,29 @@ def _filter_features_inplace(data, low_freq, high_freq):
     else:
         raise ValueError("Highpass filter not supported.")
 
+    _apply_filter_inplace(data, b, a)
+    return data
+
+
+def _apply_filter_inplace(data, b, a):
     for i in range(_trial_count(data)):
         trial, _time = _trial_and_time(data, i)
-        data["trial"][0][0][i] = filtfilt(b, a, trial.T, axis=0).T
+        data["trial"][0][0][i] = _filtfilt_trial(b, a, trial)
     return data
+
+
+def _filtfilt_trial(b, a, trial):
+    if trial.shape[1] < 2:
+        raise ValueError("Filtering requires at least two time samples per trial.")
+
+    padlen = min(3 * max(len(a), len(b)), trial.shape[1] - 1)
+    return filtfilt(b, a, trial.T, axis=0, padlen=padlen).T
+
+
+def _anti_alias_filter_before_downsampling(data, raw_fs, new_framerate):
+    anti_alias_high_freq = 0.5 * new_framerate
+    b, a = butter(4, anti_alias_high_freq / (raw_fs / 2), "low")
+    return _apply_filter_inplace(data, b, a)
 
 
 def _downsample_data_inplace(data, new_framerate):
@@ -100,8 +119,11 @@ def _downsample_data_inplace(data, new_framerate):
         raise ValueError("New framerate must be positive.")
 
     sample_interval = _common_uniform_sample_interval(data)
-    raw_fs = round(float(1 / sample_interval))
-    if new_framerate != raw_fs:
+    raw_fs = float(1 / sample_interval)
+    if not np.isclose(new_framerate, raw_fs, rtol=1e-9, atol=1e-12):
+        if new_framerate < raw_fs:
+            data = _anti_alias_filter_before_downsampling(data, raw_fs, new_framerate)
+
         step = 1 / new_framerate
         for i in range(_trial_count(data)):
             trial, time = _trial_and_time(data, i)
@@ -118,13 +140,13 @@ def _downsample_data_inplace(data, new_framerate):
 
 
 def extract_windows(data, train_window, null_time_window):
-    if train_window[1] < train_window[0]:
+    if train_window[1] <= train_window[0]:
         raise ValueError("Train window stop must be after train window start")
 
     null_requested = not np.isnan(null_time_window).all()
     if null_requested and null_time_window[1] > 0:
         raise ValueError("Null window should not contain positive time points")
-    if null_requested and null_time_window[1] - null_time_window[0] < 0:
+    if null_requested and null_time_window[1] <= null_time_window[0]:
         raise ValueError("Invalid null window")
     if null_requested:
         _require_null_window_before_train_window(train_window, null_time_window)
@@ -135,7 +157,7 @@ def extract_windows(data, train_window, null_time_window):
     n_null_values = None
     for trial_idx in range(_trial_count(data)):
         trial, time = _trial_and_time(data, trial_idx)
-        train_slice = _nearest_window_slice(time, train_window, trial_idx, "train")
+        train_slice = _half_open_window_slice(time, train_window, trial_idx, "train")
         train_feature = trial[:, train_slice].reshape(-1, 1, order="F")
         n_train_values = _require_consistent_feature_size(
             train_feature,
@@ -238,14 +260,31 @@ def _regular_time_grid_within_support(time, step):
     return new_t
 
 
-def _nearest_window_slice(time, time_window, trial_idx, window_name):
+def _half_open_window_slice(time, time_window, trial_idx, window_name):
+    """Return the sample slice for a half-open time window [start, stop)."""
+
     start, stop = time_window
     _require_window_supported(time, start, stop, trial_idx, window_name)
-    begin_index = int(np.argmin(np.abs(time - start)))
-    end_index = int(np.argmin(np.abs(time - stop)))
-    if end_index < begin_index:
+    begin_index = _left_boundary_index(time, start)
+    end_index = _left_boundary_index(time, stop)
+    if end_index <= begin_index:
         raise ValueError(f"{window_name.capitalize()} window is empty for trial {trial_idx}.")
-    return slice(begin_index, end_index + 1)
+    return slice(begin_index, end_index)
+
+
+def _left_boundary_index(time, value):
+    """Return the insertion index for a left-inclusive sample boundary.
+
+    Floating-point roundoff can place a grid sample infinitesimally below an
+    analytically equal boundary.  Move the boundary left in that case so that
+    starts remain inclusive and stops remain exclusive for samples that are
+    numerically equal to the requested boundary.
+    """
+
+    index = int(np.searchsorted(time, value, side="left"))
+    if index > 0 and np.isclose(time[index - 1], value, rtol=1e-9, atol=1e-12):
+        index -= 1
+    return index
 
 
 def _matching_sample_window_slice(time, start, sample_count, trial_idx, window_name):

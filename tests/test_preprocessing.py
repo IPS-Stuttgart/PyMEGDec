@@ -21,7 +21,7 @@ def _structured_data(trials, times):
 
 
 class TestPreprocessing(unittest.TestCase):
-    def test_extract_windows_uses_inclusive_matlab_column_order(self):
+    def test_extract_windows_uses_half_open_intervals_and_matlab_column_order(self):
         time = np.array([[-0.4, -0.3, -0.2, -0.1, 0.0, 0.1, 0.2]])
         trial = np.array(
             [
@@ -33,8 +33,8 @@ class TestPreprocessing(unittest.TestCase):
 
         stimuli, null = extract_windows(data, (-0.1, 0.1), (-0.4, -0.2))
 
-        np.testing.assert_array_equal(stimuli[0].ravel(), [4, 14, 5, 15, 6, 16])
-        np.testing.assert_array_equal(null[0].ravel(), [1, 11, 2, 12, 3, 13])
+        np.testing.assert_array_equal(stimuli[0].ravel(), [4, 14, 5, 15])
+        np.testing.assert_array_equal(null[0].ravel(), [1, 11, 2, 12])
 
     def test_preprocess_features_rejects_touching_null_train_windows(self):
         time = np.array([[-0.3, -0.2, -0.1, 0.0, 0.1]])
@@ -43,6 +43,14 @@ class TestPreprocessing(unittest.TestCase):
 
         with self.assertRaisesRegex(ValueError, "strictly before"):
             preprocess_features(data, (0, float("inf")), float("inf"), 0.2, 0.0, -0.2)
+
+    def test_extract_windows_rejects_empty_half_open_train_window(self):
+        time = np.array([[0.0, 0.1]])
+        trial = np.array([[1, 2]], dtype=float)
+        data = _data([trial], [time])
+
+        with self.assertRaisesRegex(ValueError, "after"):
+            extract_windows(data, (0.0, 0.0), (np.nan, np.nan))
 
     def test_extract_windows_rejects_rounded_null_sample_overlap(self):
         time = np.array([[-0.4, -0.3, -0.2, -0.1, 0.0, 0.1, 0.2]])
@@ -55,7 +63,7 @@ class TestPreprocessing(unittest.TestCase):
         data = _data([trial], [time])
 
         with self.assertRaisesRegex(ValueError, "overlap"):
-            extract_windows(data, (-0.1, 0.1), (-0.25, -0.11))
+            extract_windows(data, (-0.1, 0.1), (-0.14, -0.11))
 
     def test_downsample_returns_new_data_without_mutating_input(self):
         time = np.array([[0.0, 0.25, 0.5, 0.75, 1.0]])
@@ -73,7 +81,7 @@ class TestPreprocessing(unittest.TestCase):
             np.testing.assert_allclose(downsampled["time"][0][0][index], [[0.0, 0.5, 1.0]])
             self.assertEqual(downsampled["trial"][0][0][index].shape, (2, 3))
 
-    def test_downsample_preserves_signal_values_without_implicit_detrending(self):
+    def test_downsample_noops_when_requested_rate_matches_input_rate(self):
         time = np.array([[0.0, 0.25, 0.5, 0.75, 1.0]])
         trial = np.array(
             [
@@ -83,13 +91,27 @@ class TestPreprocessing(unittest.TestCase):
         )
         data = _data([trial.copy()], [time.copy()])
 
-        downsampled = downsample_data(data, 2)
+        downsampled = downsample_data(data, 4)
 
-        np.testing.assert_allclose(downsampled["time"][0][0][0], [[0.0, 0.5, 1.0]])
-        np.testing.assert_allclose(
-            downsampled["trial"][0][0][0],
-            [[1.0, 3.0, 5.0], [10.0, 14.0, 18.0]],
+        np.testing.assert_allclose(downsampled["time"][0][0][0], time)
+        np.testing.assert_allclose(downsampled["trial"][0][0][0], trial)
+
+    def test_downsample_applies_anti_alias_filter_before_rate_reduction(self):
+        time = np.arange(0.0, 1.0, 0.001)[None, :]
+        low_component = np.sin(2 * np.pi * 10 * time.ravel())
+        above_new_nyquist = np.sin(2 * np.pi * 180 * time.ravel())
+        trial = (low_component + above_new_nyquist)[None, :]
+        data = _data([trial.copy()], [time.copy()])
+
+        downsampled = downsample_data(data, 100)
+
+        downsampled_time = downsampled["time"][0][0][0].ravel()
+        expected_low_component = np.sin(2 * np.pi * 10 * downsampled_time)
+        root_mean_square_error = np.sqrt(
+            np.mean((downsampled["trial"][0][0][0].ravel() - expected_low_component) ** 2)
         )
+
+        self.assertLess(root_mean_square_error, 0.03)
 
     def test_downsample_does_not_mutate_scipy_loaded_struct_arrays(self):
         time = np.array([[0.0, 0.25, 0.5, 0.75, 1.0]])
