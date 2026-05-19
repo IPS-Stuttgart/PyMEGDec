@@ -50,7 +50,7 @@ from pymegdec.stimulus_cross_subject import (
 HYPERALIGNMENT_TARGET_CENTERING_MODES = ("group_mean", "target_unsupervised")
 DEFAULT_HYPERALIGNMENT_COMPONENTS = 64
 DEFAULT_HYPERALIGNMENT_SAMPLE_MODE = "class_repetition"
-DEFAULT_HYPERALIGNMENT_TARGET_CENTERING = "target_unsupervised"
+DEFAULT_HYPERALIGNMENT_TARGET_CENTERING = "group_mean"
 ALIGNMENT_DATASETS = ("main", "cue")
 
 
@@ -86,9 +86,10 @@ class CrossSubjectHyperalignmentConfig:  # pylint: disable=too-many-instance-att
 def evaluate_cross_subject_hyperalignment(data_folder, participants, *, config=None, outer_participants=None, progress=None, label_shuffle_control=False, label_shuffle_seed=0):
     """Run fixed-pipeline LOSO stimulus decoding with Procrustes hyperalignment.
 
-    With the default ``target_calibration_trials_per_class=0``, the held-out
-    participant is transformed by the average training-subject hyperalignment projection.
-    This is calibration-free with respect to target labels. Setting a positive
+    With the default ``target_calibration_trials_per_class=0`` and
+    ``target_centering='group_mean'``, the held-out participant is transformed
+    by the average training-subject hyperalignment projection without estimating
+    held-out target feature-distribution statistics. Setting a positive
     target-calibration count estimates a target-specific Procrustes projection from
     those labeled target trials and excludes them from scoring.
     """
@@ -250,6 +251,7 @@ def summarize_cross_subject_hyperalignment(outer_rows, *, config=None):
             "hyperalignment_repetitions_per_class": config.hyperalignment_repetitions_per_class,
             "target_calibration_trials_per_class": config.target_calibration_trials_per_class,
             "target_centering": config.target_centering,
+            "target_centering_uses_target_distribution": _target_centering_uses_target_distribution(config),
             "classifier": config.classifier,
             "components_pca": config.components_pca,
             "max_trials_per_class_per_participant": config.max_trials_per_class_per_participant,
@@ -493,6 +495,7 @@ def _outer_row(  # pylint: disable=too-many-arguments
         "target_transform": target_transform,
         "target_calibration_trials_per_class": config.target_calibration_trials_per_class,
         "target_centering": config.target_centering,
+        "target_centering_uses_target_distribution": _target_centering_uses_target_distribution(config),
         "classifier": config.classifier,
         "classifier_param": classifier_param,
         "components_pca": config.components_pca,
@@ -559,6 +562,7 @@ def _prediction_rows(  # pylint: disable=too-many-arguments
             "target_transform": target_transform,
             "target_calibration_trials_per_class": config.target_calibration_trials_per_class,
             "target_centering": config.target_centering,
+            "target_centering_uses_target_distribution": _target_centering_uses_target_distribution(config),
             "classifier": config.classifier,
             "components_pca": config.components_pca,
             "actual_components_pca": model_bundle.actual_components_pca,
@@ -727,7 +731,7 @@ def _transform_fitted_subject(model, feature_set, alignment_feature_set):
 def _transform_group_subject(model, feature_set, alignment_feature_set, config, *, score_mask):
     if model.group_projection is None or model.group_feature_mean is None:
         raise ValueError("A group hyperalignment projection is unavailable for the held-out participant.")
-    target_mean = np.mean(feature_set.features, axis=0) if config.target_centering == "target_unsupervised" else None
+    target_mean = np.mean(feature_set.features, axis=0) if _target_centering_uses_target_distribution(config) else None
     return transform_with_alignment_projection(
         feature_set.features[score_mask],
         decode_feature_set=feature_set,
@@ -805,6 +809,10 @@ def _alignment_label(config):
 
 def _alignment_data(config):
     return str(config.alignment_data).strip().lower().replace("-", "_")
+
+
+def _target_centering_uses_target_distribution(config):
+    return str(config.target_centering).strip().lower().replace("-", "_") == "target_unsupervised"
 
 
 def _centered_window(center, size):
@@ -921,7 +929,7 @@ def _build_cross_subject_hyperalignment_parser(prog: str | None = None) -> argpa
         "--target-centering",
         choices=HYPERALIGNMENT_TARGET_CENTERING_MODES,
         default=DEFAULT_HYPERALIGNMENT_TARGET_CENTERING,
-        help="Centering used with the calibration-free group projection.",
+        help="Centering used with the calibration-free group projection. 'group_mean' is strict inductive and uses no held-out target feature statistics; 'target_unsupervised' centers by all held-out target features and is transductive.",
     )
     parser.add_argument("--max-trials-per-class-per-participant", type=int, default=None, help="Optional deterministic cap on trials per stimulus class and participant.")
     parser.add_argument("--chance-classes", type=int, default=DEFAULT_CROSS_SUBJECT_CHANCE_CLASSES, help="Number of stimulus classes used for chance level.")

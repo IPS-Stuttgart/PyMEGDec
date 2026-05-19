@@ -128,7 +128,8 @@ def _channel_indices_from_range(channel_range, n_channels):
     return range(start, stop + 1)
 
 
-def bandpass_filter_signal(signal_values, sampling_rate, lowcut=8.0, highcut=12.0, order=5):
+def bandpass_filter_signal(signal_values, sampling_rate, lowcut=8.0, highcut=12.0, order=5, *, filter_phase="zero_phase"):
+    filter_phase = _normalize_filter_phase(filter_phase)
     signal_values = _validated_signal_values(signal_values)
     sampling_rate = _validated_sampling_rate(sampling_rate)
     nyquist = 0.5 * sampling_rate
@@ -146,16 +147,37 @@ def bandpass_filter_signal(signal_values, sampling_rate, lowcut=8.0, highcut=12.
         fs=sampling_rate,
         output="sos",
     )
-    return scipy.signal.sosfiltfilt(sos, signal_values)
+    return _apply_sos_filter(sos, signal_values, filter_phase)
 
 
-def extract_alpha_signal_and_phase(signal_values, sampling_rate, lowcut=8.0, highcut=12.0):
-    filtered_signal = bandpass_filter_signal(signal_values, sampling_rate, lowcut, highcut)
+def _normalize_filter_phase(filter_phase):
+    if filter_phase in {"zero_phase", "zero-phase", "filtfilt"}:
+        return "zero_phase"
+    if filter_phase in {"causal", "forward", "lfilter"}:
+        return "causal"
+    raise ValueError(
+        "filter_phase must be 'zero_phase' for offline zero-phase filtering "
+        "or 'causal' to avoid future-sample leakage in timing analyses."
+    )
+
+
+def _apply_sos_filter(sos, signal_values, filter_phase):
+    if filter_phase == "zero_phase":
+        return scipy.signal.sosfiltfilt(sos, signal_values)
+    if signal_values.ndim != 1:
+        raise ValueError("causal filter_phase currently supports one-dimensional alpha signals.")
+    zi = scipy.signal.sosfilt_zi(sos) * signal_values[0]
+    filtered, _ = scipy.signal.sosfilt(sos, signal_values, zi=zi)
+    return filtered
+
+
+def extract_alpha_signal_and_phase(signal_values, sampling_rate, lowcut=8.0, highcut=12.0, *, filter_phase="zero_phase"):
+    filtered_signal = bandpass_filter_signal(signal_values, sampling_rate, lowcut, highcut, filter_phase=filter_phase)
     analytic_signal = scipy.signal.hilbert(filtered_signal)
     return filtered_signal, np.angle(analytic_signal)
 
 
-def extract_phase(signal_values, sampling_rate, lowcut=8.0, highcut=12.0):
+def extract_phase(signal_values, sampling_rate, lowcut=8.0, highcut=12.0, *, filter_phase="zero_phase"):
     """
     Extracts the phase of the given signal using bandpass filtering and
     Hilbert transform.
@@ -169,7 +191,7 @@ def extract_phase(signal_values, sampling_rate, lowcut=8.0, highcut=12.0):
     Returns:
         numpy array: The phase of the filtered signal.
     """
-    _, phase = extract_alpha_signal_and_phase(signal_values, sampling_rate, lowcut, highcut)
+    _, phase = extract_alpha_signal_and_phase(signal_values, sampling_rate, lowcut, highcut, filter_phase=filter_phase)
     return phase
 
 
@@ -191,7 +213,7 @@ def average_phases(phases):
     return mean_phase
 
 
-def extract_time_basis(data, trial_idx=0, channel_range=(187, 198)):
+def extract_time_basis(data, trial_idx=0, channel_range=(187, 198), *, filter_phase="zero_phase"):
     """
     Extracts a robust time basis based on the alpha phases across multiple
     channels for a given trial.
@@ -212,7 +234,7 @@ def extract_time_basis(data, trial_idx=0, channel_range=(187, 198)):
     phases = []
     for channel_idx in channel_indices:
         signal_curr_chan = signal[channel_idx, :]
-        phase = extract_phase(signal_curr_chan, sampling_rate)
+        phase = extract_phase(signal_curr_chan, sampling_rate, filter_phase=filter_phase)
         phases.append(phase)
 
     mean_phase = average_phases(phases)

@@ -119,9 +119,9 @@ on:
         default: "10"
         type: string
       target_centering:
-        description: How to center the held-out participant before group-space projection.
+        description: How to center the held-out participant before group-space projection. group_mean is strict inductive; target_unsupervised is transductive.
         required: true
-        default: target_unsupervised
+        default: group_mean
         type: choice
         options: [group_mean, target_unsupervised]
       signflip_permutations:

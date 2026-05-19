@@ -4,7 +4,7 @@ import copy
 
 import numpy as np
 from scipy.interpolate import interp1d
-from scipy.signal import butter, filtfilt
+from scipy.signal import butter, filtfilt, lfilter, lfilter_zi
 
 
 def preprocess_features(
@@ -14,9 +14,12 @@ def preprocess_features(
     window_size,
     train_window_center,
     null_window_center,
+    *,
+    filter_phase="zero_phase",
 ):
     data = _copy_preprocessing_data(data)
-    data = _filter_features_inplace(data, frequency_range[0], frequency_range[1])
+    _require_antialias_filter_for_downsampling(data, frequency_range[1], new_framerate)
+    data = _filter_features_inplace(data, frequency_range[0], frequency_range[1], filter_phase=filter_phase)
     if new_framerate != float("inf"):
         data = _downsample_data_inplace(data, new_framerate)
 
@@ -31,8 +34,8 @@ def preprocess_features(
     return stimuli_features_cell, null_features_cell
 
 
-def filter_features(data, low_freq, high_freq):
-    return _filter_features_inplace(_copy_preprocessing_data(data), low_freq, high_freq)
+def filter_features(data, low_freq, high_freq, *, filter_phase="zero_phase"):
+    return _filter_features_inplace(_copy_preprocessing_data(data), low_freq, high_freq, filter_phase=filter_phase)
 
 
 def downsample_data(data, new_framerate):
@@ -68,7 +71,8 @@ def _copy_nested_array(value):
     return copy.deepcopy(value)
 
 
-def _filter_features_inplace(data, low_freq, high_freq):
+def _filter_features_inplace(data, low_freq, high_freq, *, filter_phase="zero_phase"):
+    filter_phase = _normalize_filter_phase(filter_phase)
     sample_interval = _common_uniform_sample_interval(data)
     sample_rate = float(1 / sample_interval)
 
@@ -91,8 +95,50 @@ def _filter_features_inplace(data, low_freq, high_freq):
 
     for i in range(_trial_count(data)):
         trial, _time = _trial_and_time(data, i)
-        data["trial"][0][0][i] = filtfilt(b, a, trial.T, axis=0).T
+        data["trial"][0][0][i] = _apply_iir_filter_to_trial(b, a, trial, filter_phase)
     return data
+
+
+def _normalize_filter_phase(filter_phase):
+    if filter_phase in {"zero_phase", "zero-phase", "filtfilt"}:
+        return "zero_phase"
+    if filter_phase in {"causal", "forward", "lfilter"}:
+        return "causal"
+    raise ValueError(
+        "filter_phase must be 'zero_phase' for offline zero-phase filtering "
+        "or 'causal' to avoid future-sample leakage in timing analyses."
+    )
+
+
+def _apply_iir_filter_to_trial(b, a, trial, filter_phase):
+    samples_by_channel = trial.T
+    if filter_phase == "zero_phase":
+        return filtfilt(b, a, samples_by_channel, axis=0).T
+
+    zi = lfilter_zi(b, a)[:, None] * samples_by_channel[0:1, :]
+    filtered, _ = lfilter(b, a, samples_by_channel, axis=0, zi=zi)
+    return filtered.T
+
+
+def _require_antialias_filter_for_downsampling(data, high_freq, new_framerate):
+    """Reject preprocessing configurations that can alias during downsampling."""
+
+    if new_framerate == float("inf"):
+        return
+    if new_framerate <= 0:
+        return
+
+    sample_interval = _common_uniform_sample_interval(data)
+    raw_framerate = float(1 / sample_interval)
+    if new_framerate >= raw_framerate or np.isclose(new_framerate, raw_framerate, rtol=1e-6, atol=1e-12):
+        return
+
+    target_nyquist = new_framerate / 2
+    if high_freq == float("inf") or high_freq > target_nyquist:
+        raise ValueError(
+            "Downsampling requires a low-pass frequency_range with high frequency "
+            f"<= the new Nyquist frequency ({target_nyquist:g} Hz); got high frequency {high_freq:g} Hz for new_framerate={new_framerate:g} Hz."
+        )
 
 
 def _downsample_data_inplace(data, new_framerate):

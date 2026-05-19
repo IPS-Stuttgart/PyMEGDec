@@ -43,6 +43,7 @@ from pymegdec.stimulus_cross_subject import (
 )
 
 TARGET_CENTERING_MODES = ("group_mean", "target_unsupervised")
+DEFAULT_MCCA_TARGET_CENTERING = "group_mean"
 ALIGNMENT_DATASETS = ("main", "cue")
 
 
@@ -69,7 +70,7 @@ class CrossSubjectMCCAConfig:  # pylint: disable=too-many-instance-attributes
     mcca_subject_pca_components: int | float | None = None
     mcca_sample_mode: str = "class_repetition"
     mcca_repetitions_per_class: int | None = None
-    target_centering: str = "target_unsupervised"
+    target_centering: str = DEFAULT_MCCA_TARGET_CENTERING
     target_calibration_trials_per_class: int = 0
     target_projection_regularization: float | None = None
 
@@ -390,6 +391,7 @@ def _meta(config):
         "mcca_regularization": config.mcca_regularization,
         "mcca_subject_pca_components": config.mcca_subject_pca_components,
         "target_centering": config.target_centering,
+        "target_centering_uses_target_distribution": _target_centering_uses_target_distribution(config),
         "target_calibration_trials_per_class": config.target_calibration_trials_per_class,
         "target_projection_regularization": _target_projection_regularization(config),
         "classifier": config.classifier,
@@ -447,7 +449,7 @@ def _transform_fitted_subject(model, feature_set, alignment_set):
 def _transform_group_subject(model, feature_set, alignment_set, config, *, score_mask):
     if model.group_projection is None or model.group_feature_mean is None:
         raise ValueError("A group M-CCA projection is unavailable for the held-out participant.")
-    target_mean = np.mean(feature_set.features, axis=0) if config.target_centering == "target_unsupervised" else None
+    target_mean = np.mean(feature_set.features, axis=0) if _target_centering_uses_target_distribution(config) else None
     return transform_with_alignment_projection(
         feature_set.features[score_mask],
         decode_feature_set=feature_set,
@@ -526,6 +528,10 @@ def _alignment_label(config):
 
 def _alignment_data(config):
     return str(config.alignment_data).strip().lower().replace("-", "_")
+
+
+def _target_centering_uses_target_distribution(config):
+    return str(config.target_centering).strip().lower().replace("-", "_") == "target_unsupervised"
 
 
 def _target_projection_regularization(config):
@@ -637,7 +643,12 @@ def _parser(prog=None):
     parser.add_argument("--mcca-subject-pca-components", type=_optional_int, default=None)
     parser.add_argument("--mcca-sample-mode", choices=CLASS_ALIGNMENT_SAMPLE_MODES, default="class_repetition")
     parser.add_argument("--mcca-repetitions-per-class", type=int, default=None)
-    parser.add_argument("--target-centering", choices=TARGET_CENTERING_MODES, default="target_unsupervised")
+    parser.add_argument(
+        "--target-centering",
+        choices=TARGET_CENTERING_MODES,
+        default=DEFAULT_MCCA_TARGET_CENTERING,
+        help="Centering used with the calibration-free group projection. 'group_mean' is strict inductive and uses no held-out target feature statistics; 'target_unsupervised' centers by all held-out target features and is transductive.",
+    )
     parser.add_argument(
         "--target-calibration-trials-per-class",
         type=int,

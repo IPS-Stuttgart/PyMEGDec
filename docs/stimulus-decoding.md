@@ -174,8 +174,7 @@ pymegdec stimulus cross-subject-hyperalignment \
   --normalization subject_baseline_z \
   --classifier multiclass-svm \
   --components-pca 64 \
-  --hyper-components 64 \
-  --target-centering target_unsupervised
+  --hyperalignment-components 64
 ```
 
 ```bash
@@ -188,8 +187,7 @@ pymegdec stimulus cross-subject-mcca \
   --classifier multiclass-svm \
   --components-pca 64 \
   --mcca-components 64 \
-  --mcca-regularization 1e-6 \
-  --target-centering target_unsupervised
+  --mcca-regularization 1e-6
 ```
 
 The workflow default runs both `hyperalignment` and `mcca`, uses the same main
@@ -199,11 +197,16 @@ outer-fold and group-summary CSVs, and uploads them as
 predictions, confusion counts, per-stimulus recall, and confusion-pair summaries.
 
 Both methods fit the shared space from the outer-training participants. The
-default `target_unsupervised` option centers the held-out participant using its
-own unlabeled feature mean before projecting into the group space; use
-`group_mean` for a stricter target-independent centering control. Enable
-`label_shuffle_control` to check whether the shared-space pipeline returns
-near-chance performance when training labels are shuffled within participants.
+default `group_mean` option is the strict inductive setting: it applies the
+training-derived group projection without estimating a feature mean from the
+held-out participant's scored trials. Use `target_unsupervised` only when you
+intentionally want transductive unsupervised target-domain adaptation; that
+mode centers the held-out participant using its own unlabeled feature mean
+before projection. Output CSVs include `target_centering` and
+`target_centering_uses_target_distribution` so the centering policy is explicit
+in result artifacts. Enable `label_shuffle_control` to check whether the
+shared-space pipeline returns near-chance performance when training labels are
+shuffled within participants.
 
 Set `--alignment-data cue` to fit the M-CCA or hyperalignment projections from
 the independent `Part*CueData.mat` files instead of the scored main-task files.

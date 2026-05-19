@@ -5,7 +5,8 @@ DATA_DIR="${1:-${PYMEGDEC_DATA_DIR:-data}}"
 PARTICIPANTS="${PARTICIPANTS:-1-4,6,8,9,10,13-27}"
 OUT_DIR="${OUT_DIR:-outputs/alignment_loso}"
 ALIGNMENT_DATA="${ALIGNMENT_DATA:-main}"
-COMMON=(--data-dir "$DATA_DIR" --participants "$PARTICIPANTS" --window-center 0.175 --window-size 0.1 --alignment-data "$ALIGNMENT_DATA" --feature-mode sensor_flat --normalization subject_baseline_z --classifier multinomial-logistic --classifier-param 1.0 --components-pca 64 --chance-classes 16 --signflip-permutations 10000 --signflip-seed 0)
+TARGET_CENTERING="${TARGET_CENTERING:-group_mean}"
+COMMON=(--data-dir "$DATA_DIR" --participants "$PARTICIPANTS" --window-center 0.175 --window-size 0.1 --alignment-data "$ALIGNMENT_DATA" --feature-mode sensor_flat --normalization subject_baseline_z --classifier multinomial-logistic --classifier-param 1.0 --components-pca 64 --chance-classes 16 --signflip-permutations 10000 --signflip-seed 0 --target-centering "$TARGET_CENTERING")
 mkdir -p "$OUT_DIR"
 
 pymegdec stimulus cross-subject-mcca \
@@ -14,7 +15,6 @@ pymegdec stimulus cross-subject-mcca \
   --mcca-regularization 1e-6 \
   --mcca-sample-mode class_repetition \
   --mcca-repetitions-per-class 10 \
-  --target-centering target_unsupervised \
   --outer-output "$OUT_DIR/mcca_outer.csv" \
   --summary-output "$OUT_DIR/mcca_group_summary.csv" \
   --predictions-output "$OUT_DIR/mcca_predictions.csv" \
@@ -28,7 +28,6 @@ pymegdec stimulus cross-subject-hyperalignment \
   --hyperalignment-iterations 10 \
   --hyperalignment-sample-mode class_repetition \
   --hyperalignment-repetitions-per-class 10 \
-  --target-centering target_unsupervised \
   --outer-output "$OUT_DIR/hyperalignment_outer.csv" \
   --summary-output "$OUT_DIR/hyperalignment_group_summary.csv" \
   --predictions-output "$OUT_DIR/hyperalignment_predictions.csv" \
