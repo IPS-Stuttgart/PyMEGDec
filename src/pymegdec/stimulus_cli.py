@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 from collections.abc import Sequence
 from dataclasses import replace
+from math import isfinite
 
 from pymegdec.alpha_metrics import write_alpha_metrics_csv
 from pymegdec.cli import (
@@ -28,6 +29,7 @@ from pymegdec.stimulus_cue_calibration import (
 )
 from pymegdec.stimulus_cross_subject import (
     ALIGNMENT_MODES,
+    BASELINE_WHITENING_SHRINKAGE,
     DEFAULT_CROSS_SUBJECT_ALIGNMENT,
     DEFAULT_CROSS_SUBJECT_BASELINE_WINDOW,
     DEFAULT_CROSS_SUBJECT_CHANCE_CLASSES,
@@ -38,6 +40,7 @@ from pymegdec.stimulus_cross_subject import (
     DEFAULT_CROSS_SUBJECT_TRAINING_SAMPLE_WEIGHTING,
     DEFAULT_CROSS_SUBJECT_NESTED_WINDOW_CENTERS,
     DEFAULT_CROSS_SUBJECT_NORMALIZATION,
+    DEFAULT_CROSS_SUBJECT_TEMPORAL_ENSEMBLE_MODE,
     DEFAULT_CROSS_SUBJECT_TRIAL_SELECTION,
     DEFAULT_CROSS_SUBJECT_TRIAL_SELECTION_SEED,
     DEFAULT_CROSS_SUBJECT_PARTICIPANTS,
@@ -55,6 +58,7 @@ from pymegdec.stimulus_cross_subject import (
     NORMALIZATION_MODES,
     SELECTION_ENSEMBLE_DIVERSITY_MODES,
     SELECTION_ENSEMBLE_WEIGHTING_MODES,
+    TEMPORAL_ENSEMBLE_MODES,
     AUTO_CLASSIFIER_PARAM_GRID_TOKEN,
     AUTO_COMPONENTS_PCA_GRID_TOKEN,
     CrossSubjectStimulusConfig,
@@ -99,6 +103,19 @@ ROBUSTNESS_CONTROLS = (
     RobustnessCondition("pca_200", "Main-to-cue SVM, PCA 200, broadband", {"components_pca": 200}),
     RobustnessCondition("low_frequency", "Main-to-cue SVM, PCA 100, 0-30 Hz", {"frequency_range": (0.0, 30.0)}),
 )
+
+def _temporal_window_ensemble_size(candidate_configs: Sequence[CrossSubjectStimulusConfig]) -> int:
+    """Return the number of distinct train windows in a candidate grid."""
+
+    windows = {
+        (
+            float(config.window_center),
+            float(config.window_size),
+        )
+        for config in candidate_configs
+    }
+    return max(1, len(windows))
+
 
 CROSS_PERSON_ROBUST_NESTED_WINDOW_CENTERS = (0.100, 0.125, 0.150, 0.175, 0.200, 0.225, 0.250, 0.275)
 CROSS_PERSON_ROBUST_NESTED_FEATURE_MODES = (
@@ -179,6 +196,27 @@ def _parse_normalization_list(value: str) -> tuple[str, ...]:
 
 def _parse_alignment_list(value: str) -> tuple[str, ...]:
     return tuple(_alignment_token(token) for token in _parse_token_list(value))
+
+
+def _parse_baseline_whitening_shrinkage(value: str) -> float:
+    try:
+        parsed = float(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("baseline whitening shrinkage must be numeric.") from exc
+    if not isfinite(parsed) or parsed < 0.0 or parsed > 1.0:
+        raise argparse.ArgumentTypeError("baseline whitening shrinkage must be between 0 and 1.")
+    return parsed
+
+
+def _parse_baseline_whitening_shrinkage_values(value: str) -> tuple[float, ...]:
+    values = []
+    for token in value.split(","):
+        token = token.strip()
+        if token:
+            values.append(_parse_baseline_whitening_shrinkage(token))
+    if not values:
+        raise argparse.ArgumentTypeError("At least one baseline whitening shrinkage value is required.")
+    return tuple(values)
 
 
 def _parse_int_or_inf_list(value: str) -> tuple[int | float | str, ...]:
@@ -333,6 +371,12 @@ def _build_cross_subject_smoke_parser(prog: str | None = None) -> argparse.Argum
     parser.add_argument("--window-size", type=float, default=DEFAULT_CROSS_SUBJECT_WINDOW_SIZE, help="Stimulus decoding window size in seconds.")
     parser.add_argument("--baseline-window", type=_parse_time_window, default=DEFAULT_CROSS_SUBJECT_BASELINE_WINDOW, help="Baseline window as start,stop in seconds.")
     parser.add_argument(
+        "--baseline-whitening-shrinkage",
+        type=_parse_baseline_whitening_shrinkage,
+        default=BASELINE_WHITENING_SHRINKAGE,
+        help="Covariance shrinkage used by subject_baseline_whiten.",
+    )
+    parser.add_argument(
         "--feature-mode", type=_feature_mode_token, default=DEFAULT_CROSS_SUBJECT_FEATURE_MODE, choices=FEATURE_MODES, help="Feature extraction mode."
     )
     parser.add_argument(
@@ -400,6 +444,7 @@ def stimulus_cross_subject_smoke(argv: Sequence[str] | None = None, prog: str | 
         window_center=args.window_center,
         window_size=args.window_size,
         baseline_window=args.baseline_window,
+        baseline_whitening_shrinkage=args.baseline_whitening_shrinkage,
         feature_mode=args.feature_mode,
         normalization=args.normalization,
         alignment=args.alignment,
@@ -451,6 +496,12 @@ def _build_cross_subject_cue_calibrated_parser(prog: str | None = None) -> argpa
     parser.add_argument("--window-center", type=float, default=DEFAULT_CROSS_SUBJECT_WINDOW_CENTER, help="Main-task decoding window center in seconds.")
     parser.add_argument("--window-size", type=float, default=DEFAULT_CROSS_SUBJECT_WINDOW_SIZE, help="Main-task decoding window size in seconds.")
     parser.add_argument("--baseline-window", type=_parse_time_window, default=DEFAULT_CROSS_SUBJECT_BASELINE_WINDOW, help="Main-task baseline window as start,stop in seconds.")
+    parser.add_argument(
+        "--baseline-whitening-shrinkage",
+        type=_parse_baseline_whitening_shrinkage,
+        default=BASELINE_WHITENING_SHRINKAGE,
+        help="Main-task covariance shrinkage used by subject_baseline_whiten.",
+    )
     parser.add_argument(
         "--feature-mode", type=_feature_mode_token, default=DEFAULT_CROSS_SUBJECT_FEATURE_MODE, choices=FEATURE_MODES, help="Main-task feature extraction mode."
     )
@@ -548,6 +599,7 @@ def stimulus_cross_subject_cue_calibrated(argv: Sequence[str] | None = None, pro
         window_center=args.window_center,
         window_size=args.window_size,
         baseline_window=args.baseline_window,
+        baseline_whitening_shrinkage=args.baseline_whitening_shrinkage,
         feature_mode=args.feature_mode,
         normalization=args.normalization,
         alignment="none",
@@ -633,12 +685,18 @@ def _build_cross_subject_nested_parser(prog: str | None = None) -> argparse.Argu
     )
     parser.add_argument("--baseline-window", type=_parse_time_window, default=DEFAULT_CROSS_SUBJECT_BASELINE_WINDOW, help="Baseline window as start,stop in seconds.")
     parser.add_argument(
+        "--baseline-whitening-shrinkage-values",
+        type=_parse_baseline_whitening_shrinkage_values,
+        default=(BASELINE_WHITENING_SHRINKAGE,),
+        help="Comma-separated covariance shrinkage values for subject_baseline_whiten candidates.",
+    )
+    parser.add_argument(
         "--feature-modes",
         type=_parse_feature_mode_list,
         default=(DEFAULT_CROSS_SUBJECT_FEATURE_MODE,),
         help=(
             "Comma-separated feature modes or nested-grid presets "
-            f"({_feature_mode_preset_help()}), e.g. sensor_mean,sensor_flat or rich_time."
+            f"({_feature_mode_preset_help()}), e.g. sensor_mean,sensor_flat,sensor_dct3 or rich_time."
         ),
     )
     parser.add_argument(
@@ -706,6 +764,14 @@ def _build_cross_subject_nested_parser(prog: str | None = None) -> argparse.Argu
         help="Evaluate a row-z-softmax score ensemble over the top K inner-LOSO candidates instead of only the single winner.",
     )
     parser.add_argument(
+        "--temporal-window-ensemble",
+        action="store_true",
+        help=(
+            "Shortcut for a window-diverse score ensemble over the best inner-LOSO candidate at each candidate "
+            "window center. Overrides --selection-ensemble-size and --selection-ensemble-diversity."
+        ),
+    )
+    parser.add_argument(
         "--selection-ensemble-diversity",
         choices=SELECTION_ENSEMBLE_DIVERSITY_MODES,
         default=DEFAULT_CROSS_SUBJECT_SELECTION_ENSEMBLE_DIVERSITY,
@@ -728,6 +794,21 @@ def _build_cross_subject_nested_parser(prog: str | None = None) -> argparse.Argu
         type=float,
         default=DEFAULT_CROSS_SUBJECT_SELECTION_ENSEMBLE_TEMPERATURE,
         help="Softmax temperature for --selection-ensemble-weighting inner_softmax.",
+    )
+    parser.add_argument(
+        "--temporal-ensemble-window-centers",
+        type=parse_float_list,
+        default=(),
+        help=(
+            "Optional comma-separated held-out temporal window centers. When set, the selected nested "
+            "configuration is refit at each center and class probabilities are averaged."
+        ),
+    )
+    parser.add_argument(
+        "--temporal-ensemble-mode",
+        choices=TEMPORAL_ENSEMBLE_MODES,
+        default=DEFAULT_CROSS_SUBJECT_TEMPORAL_ENSEMBLE_MODE,
+        help="Temporal ensemble aggregation mode used with --temporal-ensemble-window-centers.",
     )
     parser.add_argument("--chance-classes", type=int, default=DEFAULT_CROSS_SUBJECT_CHANCE_CLASSES, help="Number of stimulus classes used for chance level.")
     parser.add_argument("--random-state", type=int, default=0, help="Random state passed to classifiers.")
@@ -766,6 +847,7 @@ def stimulus_cross_subject_nested(argv: Sequence[str] | None = None, prog: str |
         window_size=args.window_size,
         window_jitter_offsets=args.window_jitter_offsets,
         baseline_window=args.baseline_window,
+        baseline_whitening_shrinkage_values=args.baseline_whitening_shrinkage_values,
         feature_modes=args.feature_modes,
         normalizations=args.normalizations,
         alignments=args.alignments,
@@ -781,6 +863,11 @@ def stimulus_cross_subject_nested(argv: Sequence[str] | None = None, prog: str |
         signflip_permutations=args.signflip_permutations,
         signflip_seed=args.signflip_seed,
     )
+    selection_ensemble_size = args.selection_ensemble_size
+    selection_ensemble_diversity = args.selection_ensemble_diversity
+    if args.temporal_window_ensemble:
+        selection_ensemble_size = _temporal_window_ensemble_size(candidate_configs)
+        selection_ensemble_diversity = "window"
     artifacts = export_nested_cross_subject_stimulus(
         data_folder,
         participants,
@@ -796,11 +883,13 @@ def stimulus_cross_subject_nested(argv: Sequence[str] | None = None, prog: str |
         resume=args.resume,
         write_incremental=args.write_incremental,
         outer_participants=outer_participants,
-        selection_ensemble_size=args.selection_ensemble_size,
-        selection_ensemble_diversity=args.selection_ensemble_diversity,
+        selection_ensemble_size=selection_ensemble_size,
+        selection_ensemble_diversity=selection_ensemble_diversity,
         selection_ensemble_score_normalization=args.selection_ensemble_score_normalization,
         selection_ensemble_weighting=args.selection_ensemble_weighting,
         selection_ensemble_temperature=args.selection_ensemble_temperature,
+        temporal_ensemble_window_centers=args.temporal_ensemble_window_centers,
+        temporal_ensemble_mode=args.temporal_ensemble_mode,
         progress=lambda message: print(message, flush=True),
         label_shuffle_control=args.label_shuffle_control,
         label_shuffle_seed=args.label_shuffle_seed,

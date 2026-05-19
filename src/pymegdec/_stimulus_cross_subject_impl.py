@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import csv
+import os
 from collections import Counter
 from dataclasses import dataclass
 from itertools import product
@@ -18,6 +19,14 @@ from pymegdec.classifiers import (
     should_use_default_classifier_param,
     train_multiclass_classifier,
 )
+
+_IMPL_IMPORT_GUARD = "PYMEGDEC_ALLOW_STIMULUS_CROSS_SUBJECT_IMPL_IMPORT"
+
+if os.environ.get(_IMPL_IMPORT_GUARD) != "1":
+    raise ImportError(
+        "pymegdec._stimulus_cross_subject_impl is an internal unpatched implementation. "
+        "Import pymegdec.stimulus_cross_subject or pymegdec._stimulus_cross_subject_core instead."
+    )
 from pymegdec.data_config import resolve_data_folder
 from neureptrace.decoding.windowed import fit_window_model as fit_reptrace_window_model
 from neureptrace.decoding.windowed import (
@@ -72,7 +81,15 @@ ENSEMBLE_SCORE_NORMALIZATION_MODES = ("row_z_softmax", "rank_softmax")
 SELECTION_ENSEMBLE_DIVERSITY_MODES = ("none", "window", "classifier", "window_classifier", "full_config")
 NESTED_SCORE_ENSEMBLE_CLASSIFIER = "nested_topk_score_ensemble"
 NESTED_SCORE_ENSEMBLE_NORMALIZATION = DEFAULT_CROSS_SUBJECT_ENSEMBLE_SCORE_NORMALIZATION
-FEATURE_MODES = ("sensor_mean", "sensor_flat", "sensor_mean_slope", "sensor_mean_slope_std", "sensor_mean_slope_std_halves")
+SENSOR_DCT3_COMPONENTS = 3
+FEATURE_MODES = (
+    "sensor_mean",
+    "sensor_flat",
+    "sensor_mean_slope",
+    "sensor_mean_slope_std",
+    "sensor_mean_slope_std_halves",
+    "sensor_dct3",
+)
 FEATURE_MODE_PRESETS = {
     "compact_time": ("sensor_mean", "sensor_mean_slope", "sensor_mean_slope_std", "sensor_mean_slope_std_halves"),
     "rich_time": ("sensor_mean", "sensor_mean_slope", "sensor_mean_slope_std", "sensor_mean_slope_std_halves", "sensor_flat"),
@@ -111,6 +128,7 @@ class CrossSubjectStimulusConfig:  # pylint: disable=too-many-instance-attribute
     window_center: float = DEFAULT_CROSS_SUBJECT_WINDOW_CENTER
     window_size: float = DEFAULT_CROSS_SUBJECT_WINDOW_SIZE
     baseline_window: tuple[float, float] = DEFAULT_CROSS_SUBJECT_BASELINE_WINDOW
+    baseline_whitening_shrinkage: float = BASELINE_WHITENING_SHRINKAGE
     feature_mode: str = DEFAULT_CROSS_SUBJECT_FEATURE_MODE
     normalization: str = DEFAULT_CROSS_SUBJECT_NORMALIZATION
     alignment: str = DEFAULT_CROSS_SUBJECT_ALIGNMENT
@@ -337,7 +355,12 @@ def load_participant_stimulus_features(data_folder, participant, *, config=None)
     if config.normalization in ("subject_baseline_z", "subject_baseline_whiten"):
         baseline_feature_mean, baseline_feature_std, n_baseline_samples = _baseline_feature_statistics(data, config, n_window_samples, trial_indices)
     if config.normalization == "subject_baseline_whiten":
-        baseline_whitening_matrix, n_baseline_samples = _baseline_channel_whitening_matrix(data, config.baseline_window, trial_indices)
+        baseline_whitening_matrix, n_baseline_samples = _baseline_channel_whitening_matrix(
+            data,
+            config.baseline_window,
+            trial_indices,
+            shrinkage=config.baseline_whitening_shrinkage,
+        )
     normalized_features = _normalize_features(features, config, baseline_feature_mean, baseline_feature_std, baseline_whitening_matrix)
     if labels.shape[0] != features.shape[0]:
         raise ValueError(f"Participant {participant} has {labels.shape[0]} labels but {features.shape[0]} feature rows.")
@@ -455,6 +478,12 @@ def summarize_nested_cross_subject_stimulus(outer_rows, *, signflip_permutations
     normalization_counts = _row_value_counts(outer_rows, "selected_normalization", fallback_key="normalization")
     alignment_counts = _row_value_counts(outer_rows, "selected_alignment", fallback_key="alignment")
     components_pca_counts = _row_value_counts(outer_rows, "selected_components_pca", fallback_key="components_pca")
+    baseline_whitening_shrinkage_counts = _row_value_counts(
+        outer_rows,
+        "selected_baseline_whitening_shrinkage",
+        fallback_key="baseline_whitening_shrinkage",
+        transform=float,
+    )
     trial_cap_counts = Counter(str(row["max_trials_per_class_per_participant"]) for row in outer_rows)
     winner_margins = _finite_metric_values(outer_rows, "selected_inner_winner_margin")
     label_shuffle_control = _single_row_value(outer_rows, "label_shuffle_control", default=False)
@@ -505,6 +534,9 @@ def summarize_nested_cross_subject_stimulus(outer_rows, *, signflip_permutations
             "selected_normalization_counts": _format_counter(normalization_counts),
             "selected_alignment_counts": _format_counter(alignment_counts),
             "selected_components_pca_counts": _format_counter(components_pca_counts),
+            "selected_baseline_whitening_shrinkage_counts": _format_counter(
+                baseline_whitening_shrinkage_counts
+            ),
             "max_trials_per_class_per_participant_counts": _format_counter(trial_cap_counts),
             "inner_winner_margin_mean": _nanmean_or_nan(winner_margins),
             "inner_winner_margin_median": _nanmedian_or_nan(winner_margins),
@@ -2024,6 +2056,8 @@ def _extract_window_features(data, time_window, *, feature_mode, trial_indices=N
             feature = _sensor_mean_slope_std_feature(window_signal, time_vector[mask])
         elif feature_mode == "sensor_mean_slope_std_halves":
             feature = _sensor_mean_slope_std_halves_feature(window_signal, time_vector[mask])
+        elif feature_mode == "sensor_dct3":
+            feature = _sensor_dct_feature(window_signal, n_components=SENSOR_DCT3_COMPONENTS)
         else:
             raise ValueError(f"Unsupported feature_mode: {feature_mode}")
         features.append(feature)
@@ -2072,6 +2106,34 @@ def _sensor_half_window_means(window_signal):
     return np.mean(window_signal[:, :split], axis=1), np.mean(window_signal[:, split:], axis=1)
 
 
+def _sensor_dct_feature(window_signal, *, n_components):
+    window_signal = np.asarray(window_signal, dtype=float)
+    n_components = int(n_components)
+    if n_components < 1:
+        raise ValueError("n_components must be at least 1")
+    n_time = int(window_signal.shape[1])
+    if n_time < 1:
+        raise ValueError("window_signal must contain at least one time sample")
+    basis = _orthonormal_dct2_basis(n_time, min(n_components, n_time))
+    coefficients = window_signal @ basis.T
+    if coefficients.shape[1] < n_components:
+        padding = np.zeros((coefficients.shape[0], n_components - coefficients.shape[1]), dtype=float)
+        coefficients = np.concatenate((coefficients, padding), axis=1)
+    return coefficients.reshape(-1, order="C")
+
+
+def _orthonormal_dct2_basis(n_time, n_components):
+    n_time = int(n_time)
+    n_components = int(n_components)
+    sample_indices = np.arange(n_time, dtype=float)
+    basis = np.empty((n_components, n_time), dtype=float)
+    for component in range(n_components):
+        basis[component] = np.cos(np.pi * (sample_indices + 0.5) * component / n_time)
+        basis[component] *= np.sqrt(2.0 / n_time)
+    basis[0] = 1.0 / np.sqrt(float(n_time))
+    return basis
+
+
 def _sensor_window_slopes(window_signal, window_time, means):
     if window_signal.shape[1] < 2 or np.ptp(window_time) <= 1e-12:
         return np.zeros(window_signal.shape[0], dtype=float)
@@ -2081,7 +2143,7 @@ def _sensor_window_slopes(window_signal, window_time, means):
 
 
 def _baseline_feature_statistics(data, config, n_window_samples, trial_indices):
-    if config.feature_mode in {"sensor_mean", "sensor_mean_slope", "sensor_mean_slope_std", "sensor_mean_slope_std_halves"}:
+    if config.feature_mode in {"sensor_mean", "sensor_mean_slope", "sensor_mean_slope_std", "sensor_mean_slope_std_halves", "sensor_dct3"}:
         baseline_features, n_baseline_samples = _extract_window_features(data, config.baseline_window, feature_mode=config.feature_mode, trial_indices=trial_indices)
         mean = np.mean(baseline_features, axis=0, keepdims=True)
         std = np.std(baseline_features, axis=0, keepdims=True)
@@ -2113,11 +2175,17 @@ def _baseline_channel_statistics(data, baseline_window, trial_indices):
     return mean, np.sqrt(variance), int(np.sum(mask))
 
 
-def _baseline_channel_whitening_matrix(data, baseline_window, trial_indices):
+def _baseline_channel_whitening_matrix(
+    data,
+    baseline_window,
+    trial_indices,
+    *,
+    shrinkage=BASELINE_WHITENING_SHRINKAGE,
+):
     baseline_features, n_baseline_samples = _extract_window_features(data, baseline_window, feature_mode="sensor_mean", trial_indices=trial_indices)
     return reptrace_baseline_channel_whitening_matrix_from_features(
         baseline_features,
-        shrinkage=BASELINE_WHITENING_SHRINKAGE,
+        shrinkage=_normalize_baseline_whitening_shrinkage(shrinkage),
         eigenvalue_floor=BASELINE_WHITENING_EIGENVALUE_FLOOR,
     ), n_baseline_samples
 
@@ -2429,6 +2497,9 @@ def _normalized_config(config):
         window_center=config.window_center,
         window_size=config.window_size,
         baseline_window=config.baseline_window,
+        baseline_whitening_shrinkage=_normalize_baseline_whitening_shrinkage(
+            getattr(config, "baseline_whitening_shrinkage", BASELINE_WHITENING_SHRINKAGE)
+        ),
         feature_mode=_normalize_feature_mode(config.feature_mode),
         normalization=_normalize_normalization(config.normalization),
         alignment=_normalize_alignment(config.alignment),
@@ -2527,6 +2598,15 @@ def _normalize_feature_mode(value):
 
 def _normalize_normalization(value):
     return reptrace_normalize_normalization(value)
+
+
+def _normalize_baseline_whitening_shrinkage(value):
+    value = float(value)
+    if not np.isfinite(value) or value < 0.0 or value > 1.0:
+        raise ValueError(
+            "baseline_whitening_shrinkage must be a finite value between 0 and 1."
+        )
+    return value
 
 
 def _normalize_alignment(value):

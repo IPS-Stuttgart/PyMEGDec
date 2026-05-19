@@ -252,6 +252,7 @@ def load_participant_cue_calibration_features(data_folder, participant, *, confi
             data,
             config.baseline_window,
             trial_indices,
+            shrinkage=config.baseline_whitening_shrinkage,
         )
     normalized_features = cross_subject._normalize_features(  # pylint: disable=protected-access
         features,
@@ -516,6 +517,7 @@ def _calibration_feature_config(calibration_config, decode_config):
         window_center=calibration_config.window_center,
         window_size=calibration_config.window_size,
         baseline_window=calibration_config.baseline_window,
+        baseline_whitening_shrinkage=decode_config.baseline_whitening_shrinkage,
         feature_mode=calibration_config.feature_mode,
         normalization=calibration_config.normalization,
         alignment="none",

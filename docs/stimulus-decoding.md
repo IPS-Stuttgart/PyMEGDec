@@ -55,7 +55,9 @@ Supported cross-subject normalization modes are `none`, `subject_z`,
 `subject_trial_z` normalizes each trial feature vector independently.
 `subject_baseline_whiten` estimates a shrinkage channel covariance from the
 baseline window and applies the resulting channel whitening transform to each
-stimulus-window feature vector.
+stimulus-window feature vector. The fixed-pipeline command uses
+`--baseline-whitening-shrinkage` for that covariance estimator; the default
+remains `0.1` for backward compatibility.
 
 ## Nested cross-subject benchmark
 
@@ -72,7 +74,8 @@ pymegdec stimulus cross-subject-nested \
   --window-size 0.1 \
   --feature-modes sensor_flat \
   --normalizations subject_baseline_z,subject_trial_z,subject_baseline_whiten \
-  --alignments none,train_class_procrustes,target_covariance_recolor \
+  --baseline-whitening-shrinkage-values 0.05,0.1,0.25 \
+  --alignments none,train_class_procrustes,target_covariance_recolor,target_coral_unsupervised \
   --classifiers multinomial-logistic,shrinkage-lda,multiclass-svm \
   --classifier-params default \
   --components-pca-values 64 \
@@ -103,9 +106,11 @@ validation fold and candidate, selected hyperparameters per outer fold, trial
 predictions, confusion counts, per-stimulus accuracy, and a group summary.
 The group summary reports selected-candidate counts for classifier, window
 center, feature mode, normalization, alignment, and PCA components. It also
-reports the inner winner margin, defined per outer fold as the best inner
-balanced accuracy minus the second-best inner balanced accuracy, to make noisy
-hyperparameter selection visible.
+reports the selected baseline-whitening shrinkage when
+`subject_baseline_whiten` is part of the candidate grid. The inner winner
+margin is defined per outer fold as the best inner balanced accuracy minus the
+second-best inner balanced accuracy, to make noisy hyperparameter selection
+visible.
 
 For cross-person latency jitter, average scores over small windows around each
 nominal candidate center instead of trusting a single fixed latency. This keeps
@@ -140,6 +145,12 @@ time, uses the held-out participant's unlabeled feature distribution to whiten
 and recolor that participant into the same template. Report it as transductive
 or unlabeled-target-adapted rather than as strict zero-shot LOSO, because the
 scored participant's feature distribution is used even though labels are not.
+
+The `target_coral_unsupervised` alignment mode is an explicitly transductive
+CORAL-style control. It fits the classifier on source participants, then uses
+the held-out participant's unlabeled scored feature mean and covariance to map
+target features into the source covariance domain before PCA/classifier
+scoring. Report it separately from target-independent LOSO controls.
 
 ## Cue-calibrated cross-subject benchmark
 

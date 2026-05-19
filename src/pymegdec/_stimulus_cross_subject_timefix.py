@@ -36,6 +36,11 @@ def _extract_window_features(data, time_window, *, feature_mode, trial_indices=N
             feature = _impl._sensor_mean_slope_std_feature(window_signal, time_vector[mask])
         elif feature_mode == "sensor_mean_slope_std_halves":
             feature = _impl._sensor_mean_slope_std_halves_feature(window_signal, time_vector[mask])
+        elif feature_mode == "sensor_dct3":
+            feature = _impl._sensor_dct_feature(
+                window_signal,
+                n_components=_impl.SENSOR_DCT3_COMPONENTS,
+            )
         else:
             raise ValueError(f"Unsupported feature_mode: {feature_mode}")
         features.append(feature)

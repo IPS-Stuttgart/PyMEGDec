@@ -6,10 +6,12 @@ from pathlib import Path
 from unittest.mock import patch
 
 import numpy as np
+from pymegdec import stimulus_cli
 from pymegdec import stimulus_cross_subject as cross_subject
 from pymegdec.stimulus_cross_subject import (
     AUTO_CLASSIFIER_PARAM_GRID_TOKEN,
     AUTO_COMPONENTS_PCA_GRID_TOKEN,
+    BASELINE_WHITENING_SHRINKAGE,
     CLASSIFIER_AUTO_PARAM_GRIDS,
     COMPONENTS_PCA_AUTO_GRID,
     CrossSubjectStimulusConfig,
@@ -215,6 +217,32 @@ class TestStimulusCrossSubject(unittest.TestCase):
             np.asarray([3.0, 6.0, 2.0, 4.0, 1.0, 2.0, 2.0, 4.0, 4.0, 8.0]),
         )
 
+    def test_sensor_dct3_extracts_three_temporal_coefficients_per_channel(self):
+        time = np.asarray([-0.5, 0.0, 0.1, 0.15, 0.2], dtype=float)
+        trials = [
+            [[0.0, 0.0, 1.0, 2.0, 3.0], [0.0, 0.0, 3.0, 2.0, 1.0]],
+            [[0.0, 0.0, 2.0, 3.0, 4.0], [0.0, 0.0, 4.0, 3.0, 2.0]],
+        ]
+        data_by_participant = {1: _mat_data_from_trials([1, 2], trials, time)}
+        config = CrossSubjectStimulusConfig(
+            window_center=0.15,
+            window_size=0.1,
+            feature_mode="sensor_dct3",
+            normalization="none",
+            components_pca=float("inf"),
+            chance_classes=2,
+        )
+
+        with patch("pymegdec.stimulus_cross_subject.sio.loadmat", side_effect=_loadmat_side_effect(data_by_participant)):
+            feature_set = load_participant_stimulus_features("unused", 1, config=config)
+
+        self.assertEqual(feature_set.features.shape, (2, 6))
+        expected = cross_subject._sensor_dct_feature(  # pylint: disable=protected-access
+            np.asarray([[1.0, 2.0, 3.0], [3.0, 2.0, 1.0]]),
+            n_components=3,
+        )
+        np.testing.assert_allclose(feature_set.features[0], expected)
+
     def test_sensor_mean_slope_supports_baseline_whitening(self):
         time = np.asarray([-0.5, 0.0, 0.1, 0.2], dtype=float)
         trials = [
@@ -240,6 +268,41 @@ class TestStimulusCrossSubject(unittest.TestCase):
         self.assertEqual(feature_set.baseline_feature_mean.shape, (1, 4))
         self.assertEqual(feature_set.baseline_whitening_matrix.shape, (2, 2))
         self.assertTrue(np.all(np.isfinite(feature_set.features)))
+
+    def test_baseline_whitening_shrinkage_changes_whitening_transform(self):
+        time = np.asarray([-0.5, 0.0, 0.1, 0.2], dtype=float)
+        trials = [
+            [[-1.0, -0.8, 1.0, 1.2], [0.5, 0.7, 3.0, 3.2]],
+            [[-0.4, -0.2, 2.0, 2.2], [1.1, 1.3, 4.0, 4.2]],
+            [[0.2, 0.4, 3.0, 3.2], [1.7, 1.9, 5.0, 5.2]],
+            [[0.8, 1.0, 4.0, 4.2], [2.3, 2.5, 6.0, 6.2]],
+        ]
+        data_by_participant = {1: _mat_data_from_trials([1, 2, 1, 2], trials, time)}
+        full_covariance_config = CrossSubjectStimulusConfig(
+            window_center=0.15,
+            window_size=0.1,
+            feature_mode="sensor_flat",
+            normalization="subject_baseline_whiten",
+            baseline_whitening_shrinkage=0.0,
+            components_pca=float("inf"),
+            chance_classes=2,
+        )
+        diagonal_config = CrossSubjectStimulusConfig(
+            window_center=0.15,
+            window_size=0.1,
+            feature_mode="sensor_flat",
+            normalization="subject_baseline_whiten",
+            baseline_whitening_shrinkage=1.0,
+            components_pca=float("inf"),
+            chance_classes=2,
+        )
+
+        with patch("pymegdec.stimulus_cross_subject.sio.loadmat", side_effect=_loadmat_side_effect(data_by_participant)):
+            full_covariance_set = load_participant_stimulus_features("unused", 1, config=full_covariance_config)
+            diagonal_set = load_participant_stimulus_features("unused", 1, config=diagonal_config)
+
+        self.assertFalse(np.allclose(full_covariance_set.baseline_whitening_matrix, diagonal_set.baseline_whitening_matrix))
+        self.assertFalse(np.allclose(full_covariance_set.features, diagonal_set.features))
 
     def test_sensor_mean_slope_std_supports_baseline_whitening(self):
         time = np.asarray([-0.5, 0.0, 0.1, 0.2], dtype=float)
@@ -421,6 +484,40 @@ class TestStimulusCrossSubject(unittest.TestCase):
         )
 
         self.assertEqual(tuple(config.components_pca for config in candidate_configs), (32, 64, 128, 256))
+
+    def test_baseline_whitening_shrinkage_grid_expands_candidate_configs(self):
+        candidate_configs = make_cross_subject_candidate_configs(
+            window_centers=(0.2,),
+            window_size=0.1,
+            feature_modes=("sensor_mean",),
+            normalizations=("subject_baseline_whiten",),
+            baseline_whitening_shrinkage_values=(BASELINE_WHITENING_SHRINKAGE, 0.25),
+            classifiers=("multiclass-svm",),
+            classifier_params=(0.5,),
+            components_pca_values=(64,),
+        )
+
+        self.assertEqual(
+            tuple(config.baseline_whitening_shrinkage for config in candidate_configs),
+            (BASELINE_WHITENING_SHRINKAGE, 0.25),
+        )
+        self.assertEqual(
+            len({feature_key for feature_key in map(cross_subject._feature_cache_key, candidate_configs)}),  # pylint: disable=protected-access
+            2,
+        )
+
+        non_whiten_configs = make_cross_subject_candidate_configs(
+            window_centers=(0.2,),
+            window_size=0.1,
+            feature_modes=("sensor_mean",),
+            normalizations=("none",),
+            baseline_whitening_shrinkage_values=(BASELINE_WHITENING_SHRINKAGE, 0.25),
+            classifiers=("multiclass-svm",),
+            classifier_params=(0.5,),
+            components_pca_values=(64,),
+        )
+        self.assertEqual(len(non_whiten_configs), 1)
+        self.assertEqual(non_whiten_configs[0].baseline_whitening_shrinkage, BASELINE_WHITENING_SHRINKAGE)
 
     def test_cross_person_robust_preset_expands_nested_grid_and_topk(self):
         args = Namespace(
@@ -707,6 +804,46 @@ class TestStimulusCrossSubject(unittest.TestCase):
         self.assertIn("2:", artifacts["group_summary"][0]["selected_ensemble_candidate_counts"])
         self.assertEqual(fit_model.call_count, 20)
 
+    def test_nested_cross_subject_can_ensemble_explicit_temporal_windows(self):
+        data_by_participant = {
+            1: _mat_data([1, 2, 1, 2], [-1.2, 1.2, -1.1, 1.1]),
+            2: _mat_data([1, 2, 1, 2], [-1.0, 1.0, -0.9, 0.9]),
+            3: _mat_data([1, 2, 1, 2], [-1.3, 1.3, -1.2, 1.2]),
+            4: _mat_data([1, 2, 1, 2], [-1.1, 1.1, -1.0, 1.0]),
+        }
+        candidate_configs = make_cross_subject_candidate_configs(
+            window_centers=(0.200,),
+            window_size=0.1,
+            feature_modes=("sensor_mean",),
+            normalizations=("none",),
+            classifiers=("multiclass-svm",),
+            classifier_params=(0.5,),
+            components_pca_values=(float("inf"),),
+            chance_classes=2,
+            signflip_permutations=128,
+        )
+
+        with patch("pymegdec.stimulus_cross_subject.sio.loadmat", side_effect=_loadmat_side_effect(data_by_participant)):
+            artifacts = evaluate_nested_cross_subject_stimulus(
+                "unused",
+                [1, 2, 3, 4],
+                candidate_configs=candidate_configs,
+                temporal_ensemble_window_centers=(0.150, 0.200),
+            )
+
+        self.assertEqual(len(artifacts["outer"]), 4)
+        self.assertEqual({row["classifier"] for row in artifacts["outer"]}, {"temporal_window_score_ensemble"})
+        self.assertEqual({row["outer_evaluation_mode"] for row in artifacts["outer"]}, {"temporal_window_score_ensemble"})
+        self.assertEqual({row["temporal_ensemble_mode"] for row in artifacts["outer"]}, {"probability_mean"})
+        self.assertEqual({row["temporal_ensemble_size"] for row in artifacts["outer"]}, {2})
+        self.assertEqual({row["temporal_ensemble_window_centers_s"] for row in artifacts["outer"]}, {"0.15;0.2"})
+        self.assertEqual({row["classifier"] for row in artifacts["predictions"]}, {"temporal_window_score_ensemble"})
+        self.assertEqual({row["temporal_ensemble_window_centers_s"] for row in artifacts["predictions"]}, {"0.15;0.2"})
+        self.assertEqual(artifacts["group_summary"][0]["outer_evaluation_mode"], "temporal_window_score_ensemble")
+        self.assertEqual(artifacts["group_summary"][0]["temporal_ensemble_mode"], "probability_mean")
+        self.assertEqual(artifacts["group_summary"][0]["temporal_ensemble_size"], 2)
+        self.assertEqual(artifacts["group_summary"][0]["temporal_ensemble_window_centers_s"], "0.15;0.2")
+
     def test_nested_ensemble_weights_can_follow_inner_validation_scores(self):
         rows = [
             {"selected_inner_balanced_accuracy_mean": 0.70, "selected_inner_balanced_accuracy_sem": 0.07},
@@ -784,6 +921,51 @@ class TestStimulusCrossSubject(unittest.TestCase):
         self.assertEqual(diverse["selected_candidate_indices"], "1;3")
         self.assertEqual(diverse["selection_ensemble_diversity"], "window")
         self.assertEqual(diverse["selected_ensemble_window_center_counts"], "0.1:1;0.2:1")
+
+    def test_temporal_window_ensemble_cli_shortcut_uses_all_candidate_windows(self):
+        candidate_configs = make_cross_subject_candidate_configs(
+            window_centers=(0.10, 0.20, 0.20),
+            window_size=0.1,
+            feature_modes=("sensor_mean",),
+            normalizations=("none",),
+            classifiers=("multiclass-svm",),
+            classifier_params=(0.5,),
+            components_pca_values=(float("inf"),),
+            chance_classes=2,
+        )
+        artifacts = {
+            "outer": [],
+            "inner_validation": [],
+            "selected": [],
+            "group_summary": [],
+            "predictions": [],
+            "confusion": [],
+            "per_stimulus": [],
+            "confusion_pairs": [],
+        }
+
+        with (
+            patch("pymegdec.stimulus_cli.resolve_data_folder", return_value="unused"),
+            patch("pymegdec.stimulus_cli.parse_participant_spec", return_value=[1, 2, 3]),
+            patch("pymegdec.stimulus_cli.make_cross_subject_candidate_configs", return_value=candidate_configs),
+            patch("pymegdec.stimulus_cli.export_nested_cross_subject_stimulus", return_value=artifacts) as export_nested,
+        ):
+            result = stimulus_cli.stimulus_cross_subject_nested(
+                [
+                    "--participants",
+                    "1-3",
+                    "--temporal-window-ensemble",
+                    "--selection-ensemble-size",
+                    "1",
+                    "--selection-ensemble-diversity",
+                    "classifier",
+                ]
+            )
+
+        self.assertEqual(result, 0)
+        self.assertEqual(stimulus_cli._temporal_window_ensemble_size(candidate_configs), 2)  # pylint: disable=protected-access
+        self.assertEqual(export_nested.call_args.kwargs["selection_ensemble_size"], 2)
+        self.assertEqual(export_nested.call_args.kwargs["selection_ensemble_diversity"], "window")
 
     def test_rank_softmax_score_normalization_ignores_score_scale(self):
         small_scale = cross_subject._class_score_probabilities(  # pylint: disable=protected-access
@@ -927,6 +1109,70 @@ class TestStimulusCrossSubject(unittest.TestCase):
         self.assertTrue(np.all(np.isfinite(aligned_test)))
         self.assertEqual(test_metadata["test_transform"], TARGET_COVARIANCE_RECOLOR_ALIGNMENT)
         self.assertEqual(test_metadata["target_centering"], "unlabeled_target_features")
+
+    def test_target_coral_alignment_maps_unlabeled_target_mean_to_source_mean(self):
+        source_features = np.asarray(
+            [[-2.0, -1.0], [-1.0, 1.0], [1.0, -1.0], [2.0, 1.0]],
+            dtype=float,
+        )
+        target_features = np.asarray(
+            [[10.0, -6.0], [10.5, -2.0], [11.5, -5.0], [12.0, -1.0]],
+            dtype=float,
+        )
+        config = CrossSubjectStimulusConfig(alignment="target_coral_unsupervised")
+
+        coral_model = cross_subject._fit_target_coral_model(  # pylint: disable=protected-access
+            source_features,
+            config,
+        )
+        aligned, metadata = cross_subject._apply_target_coral_model(  # pylint: disable=protected-access
+            target_features,
+            config,
+            {"target_coral_model": coral_model},
+        )
+
+        np.testing.assert_allclose(
+            np.mean(aligned, axis=0),
+            np.mean(source_features, axis=0),
+            atol=1e-10,
+        )
+        self.assertEqual(metadata["test_transform"], "target_coral_to_source")
+        self.assertEqual(metadata["target_centering"], "target_unsupervised")
+
+    def test_target_coral_alignment_marks_transductive_test_transform(self):
+        data_by_participant = {
+            1: _mat_data([1, 2, 1, 2], [-1.2, 1.2, -1.1, 1.1]),
+            2: _mat_data([1, 2, 1, 2], [-0.8, 0.8, -0.7, 0.7]),
+            3: _mat_data([1, 2, 1, 2], [-2.4, 2.4, -2.2, 2.2]),
+        }
+        config = CrossSubjectStimulusConfig(
+            window_center=0.2,
+            window_size=0.1,
+            normalization="none",
+            alignment="target_coral_unsupervised",
+            classifier="multiclass-svm",
+            classifier_param=0.5,
+            components_pca=float("inf"),
+            chance_classes=2,
+            signflip_permutations=128,
+        )
+
+        with patch("pymegdec.stimulus_cross_subject.sio.loadmat", side_effect=_loadmat_side_effect(data_by_participant)):
+            artifacts = evaluate_cross_subject_stimulus_smoke("unused", [1, 2, 3], config=config)
+
+        self.assertEqual({row["alignment"] for row in artifacts["outer"]}, {"target_coral_unsupervised"})
+        self.assertEqual(
+            {row["alignment_test_transform"] for row in artifacts["outer"]},
+            {"target_coral_to_source"},
+        )
+        self.assertEqual(
+            {row["alignment_target_centering"] for row in artifacts["outer"]},
+            {"target_unsupervised"},
+        )
+        self.assertEqual(
+            {row["alignment_test_transform"] for row in artifacts["predictions"]},
+            {"target_coral_to_source"},
+        )
 
     def test_nested_cross_subject_label_shuffle_control_marks_outputs(self):
         data_by_participant = {

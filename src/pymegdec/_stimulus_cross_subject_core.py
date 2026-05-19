@@ -11,15 +11,27 @@ from __future__ import annotations
 from collections import Counter
 from dataclasses import dataclass
 from dataclasses import replace
+import os
 
 import numpy as np
 
-from pymegdec import _stimulus_cross_subject_impl as _impl
 from pymegdec._reptrace_score_overrides import install_cross_subject
+
+_IMPL_IMPORT_GUARD = "PYMEGDEC_ALLOW_STIMULUS_CROSS_SUBJECT_IMPL_IMPORT"
+_previous_impl_import_guard = os.environ.get(_IMPL_IMPORT_GUARD)
+os.environ[_IMPL_IMPORT_GUARD] = "1"
+try:
+    from pymegdec import _stimulus_cross_subject_impl as _impl
+finally:
+    if _previous_impl_import_guard is None:
+        os.environ.pop(_IMPL_IMPORT_GUARD, None)
+    else:
+        os.environ[_IMPL_IMPORT_GUARD] = _previous_impl_import_guard
 
 DEFAULT_CROSS_SUBJECT_TRIAL_SELECTION = "random"
 DEFAULT_CROSS_SUBJECT_TRIAL_SELECTION_SEED = 0
 DEFAULT_CROSS_SUBJECT_TRAINING_SAMPLE_WEIGHTING = "none"
+BASELINE_WHITENING_SHRINKAGE = _impl.BASELINE_WHITENING_SHRINKAGE
 DEFAULT_CROSS_SUBJECT_NESTED_ALIGNMENTS = (
     _impl.DEFAULT_CROSS_SUBJECT_ALIGNMENT,
     "train_class_procrustes",
@@ -27,6 +39,9 @@ DEFAULT_CROSS_SUBJECT_NESTED_ALIGNMENTS = (
 DEFAULT_CROSS_SUBJECT_WINDOW_JITTER_OFFSETS = (0.0,)
 WINDOW_JITTER_SCORE_ENSEMBLE_CLASSIFIER = "window_jitter_score_ensemble"
 NESTED_TOPK_WINDOW_JITTER_SCORE_ENSEMBLE_CLASSIFIER = "nested_topk_window_jitter_score_ensemble"
+DEFAULT_CROSS_SUBJECT_TEMPORAL_ENSEMBLE_MODE = "probability_mean"
+TEMPORAL_ENSEMBLE_MODES = ("probability_mean",)
+TEMPORAL_WINDOW_SCORE_ENSEMBLE_CLASSIFIER = "temporal_window_score_ensemble"
 TRAINING_SAMPLE_WEIGHTING_MODES = (
     "none",
     "subject_balanced",
@@ -35,11 +50,14 @@ TRAINING_SAMPLE_WEIGHTING_MODES = (
 TRIAL_SELECTION_MODES = ("random", "first")
 AUTO_CLASSIFIER_PARAM_GRID_TOKEN = "auto-grid"
 TARGET_COVARIANCE_RECOLOR_ALIGNMENT = "target_covariance_recolor"
+TARGET_CORAL_ALIGNMENT = "target_coral_unsupervised"
+COVARIANCE_ALIGNMENT_SHRINKAGE = 0.1
+CORAL_ALIGNMENT_SHRINKAGE = 0.1
 _BASE_ALIGNMENT_MODES = tuple(_impl.ALIGNMENT_MODES)
-ALIGNMENT_MODES = (
-    (*_BASE_ALIGNMENT_MODES, TARGET_COVARIANCE_RECOLOR_ALIGNMENT)
-    if TARGET_COVARIANCE_RECOLOR_ALIGNMENT not in _BASE_ALIGNMENT_MODES
-    else _BASE_ALIGNMENT_MODES
+ALIGNMENT_MODES = tuple(
+    dict.fromkeys(
+        (*_BASE_ALIGNMENT_MODES, TARGET_COVARIANCE_RECOLOR_ALIGNMENT, TARGET_CORAL_ALIGNMENT)
+    )
 )
 AUTO_COMPONENTS_PCA_GRID_TOKEN = "auto-grid"
 COMPONENTS_PCA_AUTO_GRID = (32, 64, 128)
@@ -57,12 +75,14 @@ FEATURE_MODE_PRESETS = {
     "compact_time": ("sensor_mean", "sensor_mean_slope", "sensor_mean_slope_std", "sensor_mean_slope_std_halves"),
     "rich_time": ("sensor_mean", "sensor_mean_slope", "sensor_mean_slope_std", "sensor_mean_slope_std_halves", "sensor_flat"),
 }
-COVARIANCE_ALIGNMENT_SHRINKAGE = 0.1
 
 _BASE_CROSS_SUBJECT_CONFIG = _impl.CrossSubjectStimulusConfig
 _BASE_PARTICIPANT_FEATURE_SET = _impl.ParticipantFeatureSet
 _ORIGINAL_SCORE_OUTER_FOLD_MODEL = _impl._score_outer_fold_model
 _ORIGINAL_SUMMARIZE_CROSS_SUBJECT_STIMULUS_SMOKE = _impl.summarize_cross_subject_stimulus_smoke
+_ORIGINAL_SUMMARIZE_NESTED_CROSS_SUBJECT_STIMULUS = _impl.summarize_nested_cross_subject_stimulus
+_ORIGINAL_EVALUATE_NESTED_CROSS_SUBJECT_STIMULUS = _impl.evaluate_nested_cross_subject_stimulus
+_ORIGINAL_EXPORT_NESTED_CROSS_SUBJECT_STIMULUS = _impl.export_nested_cross_subject_stimulus
 _ORIGINAL_CACHED_NESTED_PAIR_ROWS = _impl._cached_nested_pair_rows
 _ORIGINAL_SELECT_NESTED_CANDIDATE_ENSEMBLE = _impl._select_nested_candidate_ensemble
 
@@ -73,12 +93,17 @@ class CrossSubjectStimulusConfig(_BASE_CROSS_SUBJECT_CONFIG):
 
     ``train_class_procrustes`` applies only train-derived alignment parameters
     to held-out subjects; scored target trials are not used for centering.
+
+    ``target_coral_unsupervised`` is an explicitly transductive control: it
+    uses the held-out participant's unlabeled scored feature distribution to
+    match covariance, but never uses held-out labels.
     """
 
     trial_selection: str = DEFAULT_CROSS_SUBJECT_TRIAL_SELECTION
     trial_selection_seed: int | None = DEFAULT_CROSS_SUBJECT_TRIAL_SELECTION_SEED
     training_sample_weighting: str = DEFAULT_CROSS_SUBJECT_TRAINING_SAMPLE_WEIGHTING
     window_jitter_offsets: tuple[float, ...] = DEFAULT_CROSS_SUBJECT_WINDOW_JITTER_OFFSETS
+    baseline_whitening_shrinkage: float = BASELINE_WHITENING_SHRINKAGE
 
 
 @dataclass(frozen=True)
@@ -252,6 +277,8 @@ def _apply_feature_space_affine_transform(features, transform):
 def _align_test_features_by_subject(test_features, test_set, config, alignment_model):
     if config.alignment == "none":
         return test_features, _test_alignment_metadata("none", "none")
+    if config.alignment == TARGET_CORAL_ALIGNMENT:
+        return test_features, _test_alignment_metadata("none", "target_unsupervised")
     if config.alignment == TARGET_COVARIANCE_RECOLOR_ALIGNMENT:
         target_template = alignment_model.get("target_transform")
         if target_template is None:
@@ -328,6 +355,7 @@ def make_cross_subject_candidate_configs(  # pylint: disable=too-many-arguments
     trial_selection_seed=DEFAULT_CROSS_SUBJECT_TRIAL_SELECTION_SEED,
     training_sample_weighting=DEFAULT_CROSS_SUBJECT_TRAINING_SAMPLE_WEIGHTING,
     window_jitter_offsets=DEFAULT_CROSS_SUBJECT_WINDOW_JITTER_OFFSETS,
+    baseline_whitening_shrinkage_values=(BASELINE_WHITENING_SHRINKAGE,),
     chance_classes=_impl.DEFAULT_CROSS_SUBJECT_CHANCE_CLASSES,
     random_state=0,
     signflip_permutations=10_000,
@@ -354,6 +382,7 @@ def make_cross_subject_candidate_configs(  # pylint: disable=too-many-arguments
             trial_selection_seed=trial_selection_seed,
             training_sample_weighting=training_sample_weighting,
             window_jitter_offsets=window_jitter_offsets,
+            baseline_whitening_shrinkage=baseline_whitening_shrinkage,
             chance_classes=chance_classes,
             random_state=random_state,
             signflip_permutations=signflip_permutations,
@@ -367,8 +396,207 @@ def make_cross_subject_candidate_configs(  # pylint: disable=too-many-arguments
             classifiers,
             _components_pca_values_for_grid(components_pca_values),
         )
+        for baseline_whitening_shrinkage in _baseline_whitening_shrinkage_values_for_normalization(
+            normalization,
+            baseline_whitening_shrinkage_values,
+        )
         for classifier_param in _classifier_params_for_classifier(classifier, classifier_params)
     )
+
+
+def evaluate_nested_cross_subject_stimulus(
+    data_folder,
+    participants,
+    *,
+    candidate_configs,
+    outer_participants=None,
+    selection_ensemble_size=_impl.DEFAULT_CROSS_SUBJECT_SELECTION_ENSEMBLE_SIZE,
+    selection_ensemble_weighting=_impl.DEFAULT_CROSS_SUBJECT_SELECTION_ENSEMBLE_WEIGHTING,
+    selection_ensemble_temperature=_impl.DEFAULT_CROSS_SUBJECT_SELECTION_ENSEMBLE_TEMPERATURE,
+    selection_ensemble_score_normalization=_impl.DEFAULT_CROSS_SUBJECT_ENSEMBLE_SCORE_NORMALIZATION,
+    selection_ensemble_diversity=_impl.DEFAULT_CROSS_SUBJECT_SELECTION_ENSEMBLE_DIVERSITY,
+    temporal_ensemble_window_centers=(),
+    temporal_ensemble_mode=DEFAULT_CROSS_SUBJECT_TEMPORAL_ENSEMBLE_MODE,
+    progress=None,
+    existing_artifacts=None,
+    after_outer_fold=None,
+    label_shuffle_control=False,
+    label_shuffle_seed=0,
+):
+    """Run nested LOSO selection, optionally averaging explicit temporal windows."""
+
+    temporal_ensemble_window_centers = _normalize_temporal_ensemble_window_centers(temporal_ensemble_window_centers)
+    temporal_ensemble_mode = _normalize_temporal_ensemble_mode(temporal_ensemble_mode)
+    if not temporal_ensemble_window_centers:
+        return _ORIGINAL_EVALUATE_NESTED_CROSS_SUBJECT_STIMULUS(
+            data_folder,
+            participants,
+            candidate_configs=candidate_configs,
+            outer_participants=outer_participants,
+            selection_ensemble_size=selection_ensemble_size,
+            selection_ensemble_weighting=selection_ensemble_weighting,
+            selection_ensemble_temperature=selection_ensemble_temperature,
+            selection_ensemble_score_normalization=selection_ensemble_score_normalization,
+            selection_ensemble_diversity=selection_ensemble_diversity,
+            progress=progress,
+            existing_artifacts=existing_artifacts,
+            after_outer_fold=after_outer_fold,
+            label_shuffle_control=label_shuffle_control,
+            label_shuffle_seed=label_shuffle_seed,
+        )
+
+    candidate_configs = _impl._normalized_candidate_configs(candidate_configs)
+    data_folder = _impl.resolve_data_folder(data_folder)
+    participants = tuple(int(participant) for participant in participants)
+    if len(participants) < 3:
+        raise ValueError("At least three participants are required for nested cross-subject decoding.")
+    if not candidate_configs:
+        raise ValueError("At least one candidate configuration is required.")
+    outer_participants = _impl._normalize_outer_participants(participants, outer_participants)
+    selection_ensemble_size = _impl._normalize_selection_ensemble_size(selection_ensemble_size)
+    selection_ensemble_weighting = _impl._normalize_selection_ensemble_weighting(selection_ensemble_weighting)
+    selection_ensemble_temperature = _impl._normalize_selection_ensemble_temperature(selection_ensemble_temperature)
+    selection_ensemble_score_normalization = _impl._normalize_ensemble_score_normalization(selection_ensemble_score_normalization)
+    selection_ensemble_diversity = _impl._normalize_selection_ensemble_diversity(selection_ensemble_diversity)
+
+    resumed = _impl._existing_nested_artifact_rows(existing_artifacts)
+    inner_rows = resumed["inner_validation"]
+    outer_rows = resumed["outer"]
+    selected_rows = resumed["selected"]
+    prediction_rows = resumed["predictions"]
+    completed_outer_folds = {int(row["test_participant"]) for row in outer_rows}
+    missing_participants = tuple(participant for participant in outer_participants if participant not in completed_outer_folds)
+    feature_cache_configs = _configs_with_temporal_ensemble(candidate_configs, temporal_ensemble_window_centers)
+    feature_cache = _load_feature_cache(data_folder, participants, feature_cache_configs, progress=progress) if missing_participants else {}
+    inner_pair_cache = {}
+    for test_participant in outer_participants:
+        if int(test_participant) in completed_outer_folds:
+            if progress is not None:
+                progress(f"SKIP outer_test_participant={test_participant} resume=complete")
+            continue
+        outer_row, outer_inner_rows, selected_row, participant_predictions = _evaluate_nested_outer_fold(
+            test_participant,
+            participants,
+            candidate_configs,
+            feature_cache,
+            inner_pair_cache,
+            selection_ensemble_size=selection_ensemble_size,
+            selection_ensemble_weighting=selection_ensemble_weighting,
+            selection_ensemble_temperature=selection_ensemble_temperature,
+            selection_ensemble_score_normalization=selection_ensemble_score_normalization,
+            selection_ensemble_diversity=selection_ensemble_diversity,
+            temporal_ensemble_window_centers=temporal_ensemble_window_centers,
+            temporal_ensemble_mode=temporal_ensemble_mode,
+            progress=progress,
+            label_shuffle_control=label_shuffle_control,
+            label_shuffle_seed=label_shuffle_seed,
+        )
+        inner_rows.extend(outer_inner_rows)
+        outer_rows.append(outer_row)
+        selected_rows.append(selected_row)
+        prediction_rows.extend(participant_predictions)
+        if after_outer_fold is not None:
+            after_outer_fold(_impl._assemble_nested_artifacts(outer_rows, inner_rows, selected_rows, prediction_rows, candidate_configs))
+
+    return _impl._assemble_nested_artifacts(outer_rows, inner_rows, selected_rows, prediction_rows, candidate_configs)
+
+
+def export_nested_cross_subject_stimulus(  # pylint: disable=too-many-arguments
+    data_folder,
+    participants,
+    *,
+    candidate_configs,
+    outer_output_path,
+    group_summary_output_path=None,
+    inner_validation_output_path=None,
+    selected_output_path=None,
+    predictions_output_path=None,
+    confusion_output_path=None,
+    per_stimulus_output_path=None,
+    confusion_pairs_output_path=None,
+    resume=False,
+    write_incremental=False,
+    outer_participants=None,
+    selection_ensemble_size=_impl.DEFAULT_CROSS_SUBJECT_SELECTION_ENSEMBLE_SIZE,
+    selection_ensemble_weighting=_impl.DEFAULT_CROSS_SUBJECT_SELECTION_ENSEMBLE_WEIGHTING,
+    selection_ensemble_temperature=_impl.DEFAULT_CROSS_SUBJECT_SELECTION_ENSEMBLE_TEMPERATURE,
+    selection_ensemble_score_normalization=_impl.DEFAULT_CROSS_SUBJECT_ENSEMBLE_SCORE_NORMALIZATION,
+    selection_ensemble_diversity=_impl.DEFAULT_CROSS_SUBJECT_SELECTION_ENSEMBLE_DIVERSITY,
+    temporal_ensemble_window_centers=(),
+    temporal_ensemble_mode=DEFAULT_CROSS_SUBJECT_TEMPORAL_ENSEMBLE_MODE,
+    progress=None,
+    label_shuffle_control=False,
+    label_shuffle_seed=0,
+):
+    """Run nested LOSO cross-subject decoding and write compact CSV artifacts."""
+
+    existing_artifacts = (
+        _impl._read_nested_output_rows(
+            outer_output_path=outer_output_path,
+            inner_validation_output_path=inner_validation_output_path,
+            selected_output_path=selected_output_path,
+            predictions_output_path=predictions_output_path,
+        )
+        if resume
+        else None
+    )
+
+    def write_outputs(current_artifacts):
+        _impl._write_nested_output_rows(
+            current_artifacts,
+            outer_output_path=outer_output_path,
+            group_summary_output_path=group_summary_output_path,
+            inner_validation_output_path=inner_validation_output_path,
+            selected_output_path=selected_output_path,
+            predictions_output_path=predictions_output_path,
+            confusion_output_path=confusion_output_path,
+            per_stimulus_output_path=per_stimulus_output_path,
+            confusion_pairs_output_path=confusion_pairs_output_path,
+        )
+
+    artifacts = evaluate_nested_cross_subject_stimulus(
+        data_folder,
+        participants,
+        candidate_configs=candidate_configs,
+        outer_participants=outer_participants,
+        progress=progress,
+        existing_artifacts=existing_artifacts,
+        after_outer_fold=write_outputs if write_incremental else None,
+        selection_ensemble_size=selection_ensemble_size,
+        selection_ensemble_weighting=selection_ensemble_weighting,
+        selection_ensemble_temperature=selection_ensemble_temperature,
+        selection_ensemble_score_normalization=selection_ensemble_score_normalization,
+        selection_ensemble_diversity=selection_ensemble_diversity,
+        temporal_ensemble_window_centers=temporal_ensemble_window_centers,
+        temporal_ensemble_mode=temporal_ensemble_mode,
+        label_shuffle_control=label_shuffle_control,
+        label_shuffle_seed=label_shuffle_seed,
+    )
+    write_outputs(artifacts)
+    return artifacts
+
+
+def summarize_nested_cross_subject_stimulus(outer_rows, *, signflip_permutations=10_000, signflip_seed=0):
+    """Summarize nested outer scores and preserve temporal-ensemble metadata."""
+
+    rows = _ORIGINAL_SUMMARIZE_NESTED_CROSS_SUBJECT_STIMULUS(
+        outer_rows,
+        signflip_permutations=signflip_permutations,
+        signflip_seed=signflip_seed,
+    )
+    if not rows or not any(row.get("temporal_ensemble_mode") not in (None, "") for row in outer_rows):
+        return rows
+    temporal_fields = {
+        "temporal_ensemble_mode": _impl._single_row_value(outer_rows, "temporal_ensemble_mode", default=""),
+        "temporal_ensemble_size": _impl._single_row_value(outer_rows, "temporal_ensemble_size", default=""),
+        "temporal_ensemble_window_centers_s": _impl._single_row_value(outer_rows, "temporal_ensemble_window_centers_s", default=""),
+        "temporal_ensemble_base_candidate_counts": _impl._format_counter(
+            _impl._row_value_counts(outer_rows, "temporal_ensemble_base_candidate_index", transform=int)
+        ),
+    }
+    for row in rows:
+        row.update(temporal_fields)
+    return rows
 
 
 def _expand_feature_modes(feature_modes):
@@ -404,6 +632,19 @@ def _components_pca_values_for_grid(components_pca_values):
 
 def _is_auto_components_pca_grid(value):
     return isinstance(value, str) and value.strip().lower().replace("_", "-") == AUTO_COMPONENTS_PCA_GRID_TOKEN
+
+
+def _baseline_whitening_shrinkage_values_for_grid(values):
+    return tuple(
+        _normalize_baseline_whitening_shrinkage(value)
+        for value in _dedupe_classifier_params(values)
+    )
+
+
+def _baseline_whitening_shrinkage_values_for_normalization(normalization, values):
+    if _impl._normalize_normalization(normalization) == "subject_baseline_whiten":
+        return _baseline_whitening_shrinkage_values_for_grid(values)
+    return (BASELINE_WHITENING_SHRINKAGE,)
 
 
 def _classifier_params_for_classifier(classifier, classifier_params):
@@ -481,6 +722,7 @@ def load_participant_stimulus_features(data_folder, participant, *, config=None)
             data,
             config.baseline_window,
             trial_indices,
+            shrinkage=config.baseline_whitening_shrinkage,
         )
     normalized_features = _impl._normalize_features(
         features,
@@ -519,11 +761,18 @@ def summarize_cross_subject_stimulus_smoke(outer_rows, *, config=None):
         row["trial_selection"] = config.trial_selection
         row["trial_selection_seed"] = _seed_field(config.trial_selection_seed)
         row["training_sample_weighting"] = config.training_sample_weighting
+        row["baseline_whitening_shrinkage"] = config.baseline_whitening_shrinkage
     return rows
 
 
 def _align_training_features_by_subject(feature_sets, features_by_subject, labels_by_subject, config):
     if config.alignment == "none":
+        return features_by_subject, _alignment_model(
+            config.alignment,
+            common_classes=(),
+            aligned_participants=(),
+        )
+    if config.alignment == TARGET_CORAL_ALIGNMENT:
         return features_by_subject, _alignment_model(
             config.alignment,
             common_classes=(),
@@ -661,8 +910,52 @@ def _fit_outer_fold_model(train_sets, config, classifier_param, *, label_shuffle
         "label_shuffle_seed": "" if label_shuffle_seed is None else int(label_shuffle_seed),
         "alignment_metadata": alignment_metadata,
         "training_sample_weighting": config.training_sample_weighting,
+        "target_coral_model": _fit_target_coral_model(train_features, config),
         **_sample_weight_summary(train_sample_weight),
     }
+
+
+def _fit_target_coral_model(train_features, config):
+    if config.alignment != TARGET_CORAL_ALIGNMENT:
+        return None
+    source_features = np.asarray(train_features, dtype=float)
+    source_covariance = _coral_covariance(source_features)
+    return {
+        "source_mean": np.mean(source_features, axis=0, keepdims=True),
+        "source_coloring_matrix": _covariance_square_root(source_covariance),
+    }
+
+
+def _apply_target_coral_model(test_features, config, fitted_model):
+    if config.alignment != TARGET_CORAL_ALIGNMENT:
+        return test_features, None
+    coral_model = fitted_model.get("target_coral_model")
+    if coral_model is None:
+        raise ValueError("target_coral_unsupervised requires a fitted target_coral_model.")
+
+    test_features = np.asarray(test_features, dtype=float)
+    target_mean = np.mean(test_features, axis=0, keepdims=True)
+    target_whitening_matrix = _impl._whitening_matrix(_coral_covariance(test_features))
+    source_coloring_matrix = np.asarray(coral_model["source_coloring_matrix"], dtype=float)
+    source_mean = np.asarray(coral_model["source_mean"], dtype=float)
+    aligned_features = (
+        (test_features - target_mean)
+        @ target_whitening_matrix.T
+        @ source_coloring_matrix.T
+        + source_mean
+    )
+    return aligned_features, _test_alignment_metadata(
+        "target_coral_to_source", "target_unsupervised"
+    )
+
+
+def _coral_covariance(features):
+    covariance = _impl._covariance_matrix(features)
+    return _impl._shrink_covariance(covariance, shrinkage=CORAL_ALIGNMENT_SHRINKAGE)
+
+
+def _symmetric_matrix_square_root(covariance):
+    return _covariance_square_root(covariance)
 
 
 def _score_outer_fold_model(fitted_model, test_set, config, *, include_predictions=True):
@@ -674,6 +967,9 @@ def _score_outer_fold_model(fitted_model, test_set, config, *, include_predictio
         config,
         alignment_model,
     )
+    test_features, target_coral_metadata = _apply_target_coral_model(test_features, config, fitted_model)
+    if target_coral_metadata is not None:
+        test_alignment_metadata = target_coral_metadata
     scoring_set = replace(test_set, features=test_features, normalization=config.normalization)
     scoring_model = dict(fitted_model)
     scoring_model["alignment_metadata"] = alignment_model["metadata"]
@@ -686,6 +982,7 @@ def _score_outer_fold_model(fitted_model, test_set, config, *, include_predictio
     outer_row["alignment_test_transform"] = test_alignment_metadata["test_transform"]
     outer_row["alignment_target_centering"] = test_alignment_metadata["target_centering"]
     outer_row["training_sample_weighting"] = config.training_sample_weighting
+    outer_row["baseline_whitening_shrinkage"] = config.baseline_whitening_shrinkage
     outer_row["train_sample_weight_min"] = fitted_model.get("train_sample_weight_min", np.nan)
     outer_row["train_sample_weight_max"] = fitted_model.get("train_sample_weight_max", np.nan)
     outer_row["train_sample_weight_mean"] = fitted_model.get("train_sample_weight_mean", np.nan)
@@ -695,6 +992,7 @@ def _score_outer_fold_model(fitted_model, test_set, config, *, include_predictio
         row["alignment_test_transform"] = test_alignment_metadata["test_transform"]
         row["alignment_target_centering"] = test_alignment_metadata["target_centering"]
         row["training_sample_weighting"] = config.training_sample_weighting
+        row["baseline_whitening_shrinkage"] = config.baseline_whitening_shrinkage
         row["trial_selection"] = config.trial_selection
         row["trial_selection_seed"] = _seed_field(config.trial_selection_seed)
     return outer_row, prediction_rows
@@ -709,6 +1007,7 @@ def _candidate_model_scores(fitted_model, test_set, config):
         config,
         alignment_model,
     )
+    test_features, _target_coral_metadata = _apply_target_coral_model(test_features, config, fitted_model)
     return _impl._model_class_scores(fitted_model["model_bundle"], test_features)
 
 
@@ -864,10 +1163,14 @@ def _evaluate_nested_outer_fold(
     selection_ensemble_temperature=_impl.DEFAULT_CROSS_SUBJECT_SELECTION_ENSEMBLE_TEMPERATURE,
     selection_ensemble_score_normalization=_impl.DEFAULT_CROSS_SUBJECT_ENSEMBLE_SCORE_NORMALIZATION,
     selection_ensemble_diversity=_impl.DEFAULT_CROSS_SUBJECT_SELECTION_ENSEMBLE_DIVERSITY,
+    temporal_ensemble_window_centers=(),
+    temporal_ensemble_mode=DEFAULT_CROSS_SUBJECT_TEMPORAL_ENSEMBLE_MODE,
     progress=None,
     label_shuffle_control=False,
     label_shuffle_seed=0,
 ):
+    temporal_ensemble_window_centers = _normalize_temporal_ensemble_window_centers(temporal_ensemble_window_centers)
+    temporal_ensemble_mode = _normalize_temporal_ensemble_mode(temporal_ensemble_mode)
     if progress is not None:
         progress(f"START outer_test_participant={test_participant}")
     outer_train_participants = tuple(participant for participant in participants if participant != test_participant)
@@ -895,27 +1198,73 @@ def _evaluate_nested_outer_fold(
         weighting=selected_row["selection_ensemble_weighting"],
         temperature=selected_row["selection_ensemble_temperature"],
     )
-    fitted_models, test_sets, member_configs, model_selected_rows, model_weights, nominal_configs = _fit_selected_window_model_collection(
-        int(test_participant),
-        outer_train_participants,
-        candidate_configs,
-        feature_cache,
-        selected_candidate_rows,
-        base_weights,
-        label_shuffle_seed=label_shuffle_seed if label_shuffle_control else None,
-    )
-    outer_row, participant_predictions = _score_window_model_collection(
-        fitted_models,
-        test_sets,
-        member_configs,
-        model_selected_rows,
-        nominal_configs=nominal_configs,
-        ensemble_weights=model_weights,
-        ensemble_weighting=selected_row["selection_ensemble_weighting"],
-        ensemble_temperature=selected_row["selection_ensemble_temperature"],
-        ensemble_score_normalization=selected_row["selection_ensemble_score_normalization"],
-        include_predictions=True,
-    )
+    if temporal_ensemble_window_centers:
+        fitted_models, test_sets, member_configs, model_selected_rows, model_weights = _fit_temporal_window_model_collection(
+            int(test_participant),
+            outer_train_participants,
+            candidate_configs,
+            feature_cache,
+            selected_candidate_rows,
+            base_weights,
+            window_centers=temporal_ensemble_window_centers,
+            label_shuffle_seed=label_shuffle_seed if label_shuffle_control else None,
+        )
+        outer_row, participant_predictions = _score_window_model_collection(
+            fitted_models,
+            test_sets,
+            member_configs,
+            model_selected_rows,
+            nominal_configs=member_configs,
+            ensemble_weights=model_weights,
+            ensemble_weighting=selected_row["selection_ensemble_weighting"],
+            ensemble_temperature=selected_row["selection_ensemble_temperature"],
+            ensemble_score_normalization=selected_row["selection_ensemble_score_normalization"],
+            include_predictions=True,
+        )
+        _add_temporal_ensemble_selected_fields(
+            selected_row,
+            window_centers=temporal_ensemble_window_centers,
+            mode=temporal_ensemble_mode,
+        )
+        _add_temporal_ensemble_output_fields(
+            outer_row,
+            temporal_configs=member_configs,
+            window_centers=temporal_ensemble_window_centers,
+            mode=temporal_ensemble_mode,
+            base_candidate_index=int(selected_row["selected_candidate_index"]),
+            weights=model_weights,
+        )
+        for prediction_row in participant_predictions:
+            _add_temporal_ensemble_output_fields(
+                prediction_row,
+                temporal_configs=member_configs,
+                window_centers=temporal_ensemble_window_centers,
+                mode=temporal_ensemble_mode,
+                base_candidate_index=int(selected_row["selected_candidate_index"]),
+                weights=model_weights,
+            )
+    else:
+        fitted_models, test_sets, member_configs, model_selected_rows, model_weights, nominal_configs = _fit_selected_window_model_collection(
+            int(test_participant),
+            outer_train_participants,
+            candidate_configs,
+            feature_cache,
+            selected_candidate_rows,
+            base_weights,
+            label_shuffle_seed=label_shuffle_seed if label_shuffle_control else None,
+        )
+        outer_row, participant_predictions = _score_window_model_collection(
+            fitted_models,
+            test_sets,
+            member_configs,
+            model_selected_rows,
+            nominal_configs=nominal_configs,
+            ensemble_weights=model_weights,
+            ensemble_weighting=selected_row["selection_ensemble_weighting"],
+            ensemble_temperature=selected_row["selection_ensemble_temperature"],
+            ensemble_score_normalization=selected_row["selection_ensemble_score_normalization"],
+            include_predictions=True,
+        )
     _impl._add_selected_candidate_fields(outer_row, selected_row)
     for prediction_row in participant_predictions:
         _impl._add_selected_candidate_fields(prediction_row, selected_row)
@@ -927,6 +1276,7 @@ def _evaluate_nested_outer_fold(
             f"selection_ensemble_diversity={selected_row['selection_ensemble_diversity']} "
             f"score_normalization={selected_row['selection_ensemble_score_normalization']} "
             f"selection_ensemble_weighting={selected_row['selection_ensemble_weighting']} "
+            f"temporal_ensemble_size={len(temporal_ensemble_window_centers) if temporal_ensemble_window_centers else 0} "
             f"inner_mean={selected_row['selected_inner_balanced_accuracy_mean']:.4f} "
             f"outer_balanced_accuracy={outer_row['balanced_accuracy']:.4f}"
         )
@@ -972,6 +1322,47 @@ def _fit_selected_window_model_collection(
             model_selected_rows.append(candidate_row)
             model_weights.append(member_weight)
     return fitted_models, test_sets, member_configs, tuple(model_selected_rows), np.asarray(model_weights, dtype=float), tuple(nominal_configs)
+
+
+def _fit_temporal_window_model_collection(
+    test_participant,
+    outer_train_participants,
+    candidate_configs,
+    feature_cache,
+    selected_candidate_rows,
+    base_weights,
+    *,
+    window_centers,
+    label_shuffle_seed=None,
+):
+    window_centers = _normalize_temporal_ensemble_window_centers(window_centers)
+    fitted_models = []
+    test_sets = []
+    member_configs = []
+    model_selected_rows = []
+    model_weights = []
+    for ensemble_rank, (candidate_row, base_weight) in enumerate(zip(selected_candidate_rows, base_weights, strict=True)):
+        candidate_index = int(candidate_row["selected_candidate_index"])
+        nominal_config = candidate_configs[candidate_index - 1]
+        temporal_configs = _temporal_window_configs(nominal_config, window_centers)
+        member_weight = float(base_weight) / len(temporal_configs)
+        for temporal_rank, member_config in enumerate(temporal_configs):
+            member_feature_sets = feature_cache[_feature_cache_key(member_config)]
+            train_sets = [member_feature_sets[participant] for participant in outer_train_participants]
+            fitted_models.append(
+                _impl._fit_outer_fold_model(
+                    train_sets,
+                    member_config,
+                    _impl._resolved_classifier_param(member_config),
+                    label_shuffle_seed=label_shuffle_seed,
+                    label_shuffle_context=(int(test_participant), candidate_index, int(ensemble_rank), int(temporal_rank)),
+                )
+            )
+            test_sets.append(member_feature_sets[test_participant])
+            member_configs.append(member_config)
+            model_selected_rows.append(candidate_row)
+            model_weights.append(member_weight)
+    return fitted_models, test_sets, tuple(member_configs), tuple(model_selected_rows), np.asarray(model_weights, dtype=float)
 
 
 def _score_window_model_collection(
@@ -1050,6 +1441,7 @@ def _feature_cache_key(config):
         float(config.baseline_window[1]),
         str(config.feature_mode),
         str(config.normalization),
+        float(config.baseline_whitening_shrinkage),
         config.max_trials_per_class_per_participant,
         str(getattr(config, "trial_selection", DEFAULT_CROSS_SUBJECT_TRIAL_SELECTION)),
         _seed_field(getattr(config, "trial_selection_seed", DEFAULT_CROSS_SUBJECT_TRIAL_SELECTION_SEED)),
@@ -1058,6 +1450,23 @@ def _feature_cache_key(config):
 
 def _feature_cache_configs(config):
     return _jittered_window_configs(config) if _has_window_jitter(config) else (_concrete_window_config(config),)
+
+
+def _configs_with_temporal_ensemble(candidate_configs, window_centers):
+    window_centers = _normalize_temporal_ensemble_window_centers(window_centers)
+    if not window_centers:
+        return tuple(candidate_configs)
+    configs = list(candidate_configs)
+    for config in candidate_configs:
+        configs.extend(_temporal_window_configs(config, window_centers))
+    return tuple(configs)
+
+
+def _temporal_window_configs(base_config, window_centers):
+    return tuple(
+        _concrete_window_config(replace(base_config, window_center=float(center)))
+        for center in _normalize_temporal_ensemble_window_centers(window_centers)
+    )
 
 
 def _jittered_window_configs(config):
@@ -1106,10 +1515,33 @@ def _normalize_window_jitter_offsets(value):
     return tuple(normalized)
 
 
+def _normalize_temporal_ensemble_window_centers(value):
+    if value is None or value == "":
+        return tuple()
+    if isinstance(value, str):
+        values = tuple(float(item.strip()) for item in value.split(",") if item.strip())
+    else:
+        try:
+            values = tuple(float(item) for item in value)
+        except TypeError:
+            values = (float(value),)
+    if not all(np.isfinite(item) for item in values):
+        raise ValueError("temporal_ensemble_window_centers must contain only finite values.")
+    return values
+
+
+def _normalize_temporal_ensemble_mode(value):
+    normalized = str(value).strip().lower().replace("-", "_")
+    if normalized not in TEMPORAL_ENSEMBLE_MODES:
+        raise ValueError(f"temporal_ensemble_mode must be one of {TEMPORAL_ENSEMBLE_MODES}.")
+    return normalized
+
+
 def _candidate_row_with_window_jitter_fields(row, candidate_configs):
     output = dict(row)
     candidate_config = candidate_configs[int(output["selected_candidate_index"]) - 1]
     output["selected_classifier"] = candidate_config.classifier
+    output["selected_baseline_whitening_shrinkage"] = candidate_config.baseline_whitening_shrinkage
     output["selected_window_jitter_offsets_s"] = _format_window_jitter_offsets(candidate_config)
     output["selected_window_jitter_n_offsets"] = len(_window_jitter_offsets(candidate_config))
     return output
@@ -1118,6 +1550,13 @@ def _candidate_row_with_window_jitter_fields(row, candidate_configs):
 def _add_selected_window_jitter_fields(selected, selected_rows, candidate_configs):
     selected_config = candidate_configs[int(selected["selected_candidate_index"]) - 1]
     selected["selected_classifier"] = selected_config.classifier
+    selected["selected_baseline_whitening_shrinkage"] = selected_config.baseline_whitening_shrinkage
+    selected["selected_ensemble_baseline_whitening_shrinkage_counts"] = _impl._format_counter(
+        Counter(
+            float(candidate_configs[int(row["selected_candidate_index"]) - 1].baseline_whitening_shrinkage)
+            for row in selected_rows
+        )
+    )
     selected["selected_window_jitter_offsets_s"] = _format_window_jitter_offsets(selected_config)
     selected["selected_window_jitter_n_offsets"] = len(_window_jitter_offsets(selected_config))
     selected["selected_ensemble_window_jitter_offsets_s"] = _format_sequence(
@@ -1154,6 +1593,41 @@ def _add_window_jitter_output_fields(row, nominal_configs, member_configs, *, en
     row["window_jitter_window_centers_s"] = _format_sequence(float(config.window_center) for config in member_configs)
     row["window_jitter_n_offsets"] = jitter_n_models
     row["window_jitter_score_normalization"] = _impl._normalize_ensemble_score_normalization(ensemble_score_normalization)
+    row["ensemble_baseline_whitening_shrinkages"] = _format_sequence(
+        config.baseline_whitening_shrinkage for config in nominal_configs
+    )
+
+
+def _add_temporal_ensemble_selected_fields(selected_row, *, window_centers, mode):
+    window_centers = _normalize_temporal_ensemble_window_centers(window_centers)
+    selected_row["temporal_ensemble_mode"] = _normalize_temporal_ensemble_mode(mode)
+    selected_row["temporal_ensemble_size"] = int(len(window_centers))
+    selected_row["temporal_ensemble_window_centers_s"] = _format_sequence(window_centers)
+
+
+def _add_temporal_ensemble_output_fields(
+    row,
+    *,
+    temporal_configs,
+    window_centers,
+    mode,
+    base_candidate_index,
+    weights,
+):
+    window_centers = _normalize_temporal_ensemble_window_centers(window_centers)
+    weights = np.asarray(weights, dtype=float).ravel()
+    row["outer_evaluation_mode"] = "temporal_window_score_ensemble"
+    row["classifier"] = TEMPORAL_WINDOW_SCORE_ENSEMBLE_CLASSIFIER
+    row["classifier_param"] = ""
+    row["window_center_s"] = ""
+    row["window_start_s"] = ""
+    row["window_stop_s"] = ""
+    row["temporal_ensemble_mode"] = _normalize_temporal_ensemble_mode(mode)
+    row["temporal_ensemble_size"] = int(len(window_centers))
+    row["temporal_ensemble_base_candidate_index"] = int(base_candidate_index)
+    row["temporal_ensemble_window_centers_s"] = _format_sequence(window_centers)
+    row["temporal_ensemble_model_window_centers_s"] = _format_sequence(config.window_center for config in temporal_configs)
+    row["temporal_ensemble_weights"] = _impl._format_float_mapping(enumerate(weights, start=1))
 
 
 def _format_window_jitter_offsets(config):
@@ -1189,6 +1663,7 @@ def _prediction_rows(test_set, test_labels, predictions, true_label_ranks, *, co
                 "window_stop_s": train_window[1],
                 "feature_mode": config.feature_mode,
                 "normalization": config.normalization,
+                "baseline_whitening_shrinkage": config.baseline_whitening_shrinkage,
                 "alignment": config.alignment,
                 "classifier": config.classifier,
                 "components_pca": config.components_pca,
@@ -1284,6 +1759,9 @@ def _normalized_config(config):
         trial_selection_seed=_normalize_trial_selection_seed(getattr(config, "trial_selection_seed", DEFAULT_CROSS_SUBJECT_TRIAL_SELECTION_SEED)),
         training_sample_weighting=_normalize_training_sample_weighting(getattr(config, "training_sample_weighting", DEFAULT_CROSS_SUBJECT_TRAINING_SAMPLE_WEIGHTING)),
         window_jitter_offsets=_normalize_window_jitter_offsets(getattr(config, "window_jitter_offsets", DEFAULT_CROSS_SUBJECT_WINDOW_JITTER_OFFSETS)),
+        baseline_whitening_shrinkage=_normalize_baseline_whitening_shrinkage(
+            getattr(config, "baseline_whitening_shrinkage", BASELINE_WHITENING_SHRINKAGE)
+        ),
         chance_classes=config.chance_classes,
         random_state=config.random_state,
         signflip_permutations=config.signflip_permutations,
@@ -1329,6 +1807,15 @@ def _normalize_trial_selection_seed(value):
     return value
 
 
+def _normalize_baseline_whitening_shrinkage(value):
+    value = float(value)
+    if not np.isfinite(value) or value < 0.0 or value > 1.0:
+        raise ValueError(
+            "baseline_whitening_shrinkage must be a finite value between 0 and 1."
+        )
+    return value
+
+
 def _prediction_group_columns_with_training_sample_weighting(columns):
     output = list(columns)
     if "training_sample_weighting" not in output:
@@ -1339,17 +1826,46 @@ def _prediction_group_columns_with_training_sample_weighting(columns):
     return tuple(output)
 
 
+def _prediction_group_columns_with_baseline_whitening_shrinkage(columns):
+    output = list(columns)
+    if "baseline_whitening_shrinkage" not in output:
+        try:
+            output.insert(output.index("alignment"), "baseline_whitening_shrinkage")
+        except ValueError:
+            output.append("baseline_whitening_shrinkage")
+    return tuple(output)
+
+
+def _prediction_group_columns_with_temporal_ensemble(columns):
+    output = list(columns)
+    for column in (
+        "outer_evaluation_mode",
+        "temporal_ensemble_mode",
+        "temporal_ensemble_window_centers_s",
+        "temporal_ensemble_size",
+    ):
+        if column not in output:
+            output.append(column)
+    return tuple(output)
+
+
 def _install_module_fixes():
     _impl.DEFAULT_CROSS_SUBJECT_TRIAL_SELECTION = DEFAULT_CROSS_SUBJECT_TRIAL_SELECTION  # type: ignore[attr-defined]
     _impl.DEFAULT_CROSS_SUBJECT_TRIAL_SELECTION_SEED = DEFAULT_CROSS_SUBJECT_TRIAL_SELECTION_SEED  # type: ignore[attr-defined]
     _impl.DEFAULT_CROSS_SUBJECT_NESTED_ALIGNMENTS = DEFAULT_CROSS_SUBJECT_NESTED_ALIGNMENTS  # type: ignore[attr-defined]
+    _impl.BASELINE_WHITENING_SHRINKAGE = BASELINE_WHITENING_SHRINKAGE  # type: ignore[attr-defined]
     _impl.TRIAL_SELECTION_MODES = TRIAL_SELECTION_MODES  # type: ignore[attr-defined]
     _impl.DEFAULT_CROSS_SUBJECT_WINDOW_JITTER_OFFSETS = DEFAULT_CROSS_SUBJECT_WINDOW_JITTER_OFFSETS  # type: ignore[attr-defined]
     _impl.WINDOW_JITTER_SCORE_ENSEMBLE_CLASSIFIER = WINDOW_JITTER_SCORE_ENSEMBLE_CLASSIFIER  # type: ignore[attr-defined]
     _impl.NESTED_TOPK_WINDOW_JITTER_SCORE_ENSEMBLE_CLASSIFIER = NESTED_TOPK_WINDOW_JITTER_SCORE_ENSEMBLE_CLASSIFIER  # type: ignore[attr-defined]
+    _impl.DEFAULT_CROSS_SUBJECT_TEMPORAL_ENSEMBLE_MODE = DEFAULT_CROSS_SUBJECT_TEMPORAL_ENSEMBLE_MODE  # type: ignore[attr-defined]
+    _impl.TEMPORAL_ENSEMBLE_MODES = TEMPORAL_ENSEMBLE_MODES  # type: ignore[attr-defined]
+    _impl.TEMPORAL_WINDOW_SCORE_ENSEMBLE_CLASSIFIER = TEMPORAL_WINDOW_SCORE_ENSEMBLE_CLASSIFIER  # type: ignore[attr-defined]
     _impl.TARGET_COVARIANCE_RECOLOR_ALIGNMENT = TARGET_COVARIANCE_RECOLOR_ALIGNMENT  # type: ignore[attr-defined]
+    _impl.TARGET_CORAL_ALIGNMENT = TARGET_CORAL_ALIGNMENT  # type: ignore[attr-defined]
     _impl.ALIGNMENT_MODES = ALIGNMENT_MODES
     _impl.COVARIANCE_ALIGNMENT_SHRINKAGE = COVARIANCE_ALIGNMENT_SHRINKAGE  # type: ignore[attr-defined]
+    _impl.CORAL_ALIGNMENT_SHRINKAGE = CORAL_ALIGNMENT_SHRINKAGE  # type: ignore[attr-defined]
     _impl.AUTO_CLASSIFIER_PARAM_GRID_TOKEN = AUTO_CLASSIFIER_PARAM_GRID_TOKEN  # type: ignore[attr-defined]
     _impl.AUTO_COMPONENTS_PCA_GRID_TOKEN = AUTO_COMPONENTS_PCA_GRID_TOKEN  # type: ignore[attr-defined]
     _impl.CLASSIFIER_AUTO_PARAM_GRIDS = CLASSIFIER_AUTO_PARAM_GRIDS  # type: ignore[attr-defined]
@@ -1369,9 +1885,15 @@ def _install_module_fixes():
     _impl._is_auto_classifier_param_grid = _is_auto_classifier_param_grid  # type: ignore[attr-defined]
     _impl._components_pca_values_for_grid = _components_pca_values_for_grid  # type: ignore[attr-defined]
     _impl._is_auto_components_pca_grid = _is_auto_components_pca_grid  # type: ignore[attr-defined]
+    _impl._baseline_whitening_shrinkage_values_for_grid = _baseline_whitening_shrinkage_values_for_grid  # type: ignore[attr-defined]
+    _impl._baseline_whitening_shrinkage_values_for_normalization = _baseline_whitening_shrinkage_values_for_normalization  # type: ignore[attr-defined]
+    _impl._normalize_baseline_whitening_shrinkage = _normalize_baseline_whitening_shrinkage  # type: ignore[attr-defined]
     _impl.load_participant_stimulus_features = load_participant_stimulus_features
     _impl._expand_feature_modes = _expand_feature_modes  # type: ignore[attr-defined]
     _impl.summarize_cross_subject_stimulus_smoke = summarize_cross_subject_stimulus_smoke
+    _impl.summarize_nested_cross_subject_stimulus = summarize_nested_cross_subject_stimulus
+    _impl.evaluate_nested_cross_subject_stimulus = evaluate_nested_cross_subject_stimulus
+    _impl.export_nested_cross_subject_stimulus = export_nested_cross_subject_stimulus
     _impl._ranked_label_metrics = _ranked_label_metrics
     _impl._align_training_features_by_subject = _align_training_features_by_subject
     _impl._load_feature_cache = _load_feature_cache
@@ -1382,9 +1904,17 @@ def _install_module_fixes():
     _impl._fit_outer_fold_model = _fit_outer_fold_model
     _impl._score_outer_fold_model = _score_outer_fold_model
     _impl._candidate_model_scores = _candidate_model_scores
+    _impl._fit_target_coral_model = _fit_target_coral_model  # type: ignore[attr-defined]
+    _impl._apply_target_coral_model = _apply_target_coral_model  # type: ignore[attr-defined]
+    _impl._coral_covariance = _coral_covariance  # type: ignore[attr-defined]
+    _impl._symmetric_matrix_square_root = _symmetric_matrix_square_root  # type: ignore[attr-defined]
     _impl._feature_cache_key = _feature_cache_key
+    _impl._configs_with_temporal_ensemble = _configs_with_temporal_ensemble  # type: ignore[attr-defined]
+    _impl._temporal_window_configs = _temporal_window_configs  # type: ignore[attr-defined]
     _impl._jittered_window_configs = _jittered_window_configs  # type: ignore[attr-defined]
     _impl._normalize_window_jitter_offsets = _normalize_window_jitter_offsets  # type: ignore[attr-defined]
+    _impl._normalize_temporal_ensemble_window_centers = _normalize_temporal_ensemble_window_centers  # type: ignore[attr-defined]
+    _impl._normalize_temporal_ensemble_mode = _normalize_temporal_ensemble_mode  # type: ignore[attr-defined]
     _impl._prediction_rows = _prediction_rows
     _impl._selected_trial_indices = _selected_trial_indices
     _impl._feature_set_trial_indices = _feature_set_trial_indices  # type: ignore[attr-defined]
@@ -1396,10 +1926,14 @@ def _install_module_fixes():
     _impl._training_sample_weights_by_subject = _training_sample_weights_by_subject  # type: ignore[attr-defined]
     _impl._normalize_trial_selection_seed = _normalize_trial_selection_seed  # type: ignore[attr-defined]
     install_cross_subject(_impl)
-    _impl.CROSS_SUBJECT_PREDICTION_GROUP_COLUMNS = _prediction_group_columns_with_window_jitter(
-        _prediction_group_columns_with_training_sample_weighting(
-            _prediction_group_columns_with_trial_selection(
-                _prediction_group_columns_with_alignment()
+    _impl.CROSS_SUBJECT_PREDICTION_GROUP_COLUMNS = _prediction_group_columns_with_temporal_ensemble(
+        _prediction_group_columns_with_window_jitter(
+            _prediction_group_columns_with_training_sample_weighting(
+                _prediction_group_columns_with_trial_selection(
+                    _prediction_group_columns_with_baseline_whitening_shrinkage(
+                        _prediction_group_columns_with_alignment()
+                    )
+                )
             )
         )
     )
