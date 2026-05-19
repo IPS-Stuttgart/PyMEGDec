@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import warnings
 from collections.abc import Sequence
 
 from pymegdec.alpha_metrics import (
@@ -33,6 +34,16 @@ from pymegdec.reaction_time_analysis import (
 )
 
 
+def _warn_alpha_migrated(command: str) -> None:
+    warnings.warn(
+        "PyMEGDec's reusable alpha primitives have moved to NeuRepTrace. "
+        f"Use `neureptrace-alpha {command}` or `neureptrace alpha {command}` for new runs. "
+        "The PyMEGDec command remains as a compatibility shim during migration.",
+        DeprecationWarning,
+        stacklevel=3,
+    )
+
+
 def _participants(value: str | None, data_dir, cue: bool) -> list[int]:
     if value:
         return parse_participant_spec(value)
@@ -56,6 +67,7 @@ def _build_alpha_metrics_parser(prog: str | None = None) -> argparse.ArgumentPar
 def alpha_metrics(argv: Sequence[str] | None = None, prog: str | None = None) -> int:
     parser = _build_alpha_metrics_parser(prog=prog)
     args = parser.parse_args(argv)
+    _warn_alpha_migrated("metrics")
 
     config = alpha_metric_config_from_args(args)
     rows = export_participant_alpha_metrics(
@@ -138,6 +150,7 @@ def _build_alpha_movement_parser(prog: str | None = None) -> argparse.ArgumentPa
 def alpha_movement(argv: Sequence[str] | None = None, prog: str | None = None) -> int:
     parser = _build_alpha_movement_parser(prog=prog)
     args = parser.parse_args(argv)
+    _warn_alpha_migrated("movement")
 
     participants = _participants(args.participants, args.data_dir, args.cue)
     if not participants:

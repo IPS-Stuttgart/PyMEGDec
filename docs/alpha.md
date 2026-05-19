@@ -1,7 +1,13 @@
 # Alpha analyses
 
-PyMEGDec contains exploratory alpha-band workflows for per-trial alpha metrics,
-sensor-level alpha topography movement, and alpha/reaction-time associations.
+PyMEGDec keeps compatibility entry points for exploratory alpha-band workflows,
+but the reusable per-trial alpha metrics and sensor-level alpha-topography
+movement implementation has moved to NeuRepTrace's `neureptrace.meg` package.
+Use `neureptrace-alpha metrics` and `neureptrace-alpha movement` for new runs.
+
+PyMEGDec-specific alpha/reaction-time associations remain here for now because
+they encode behavioral-file and paper-export conventions rather than reusable
+MEG alpha primitives.
 
 ## Alpha metrics
 
@@ -13,6 +19,13 @@ before stimulus onset, and the default alpha band is `8–12 Hz`.
 ```powershell
 python export_alpha_metrics.py --participant 2 --output outputs\part2_alpha_metrics.csv
 python export_alpha_metrics.py --participant 2 --cue --output outputs\part2_cue_alpha_metrics.csv
+```
+
+NeuRepTrace equivalent:
+
+```bash
+neureptrace-alpha metrics --data-dir data --participant 2 --output outputs/part2_alpha_metrics.csv
+neureptrace-alpha metrics --data-dir data --participant 2 --cue --output outputs/part2_cue_alpha_metrics.csv
 ```
 
 The exported rows include:
@@ -50,6 +63,15 @@ python analyze_alpha_movement.py `
   --participants 2 `
   --trajectory-output outputs\part2_alpha_movement.csv `
   --summary-output outputs\part2_alpha_movement_summary.csv
+```
+
+NeuRepTrace equivalent:
+
+```bash
+neureptrace-alpha movement \
+  --data-dir data --participants 2 \
+  --trajectory-output outputs/part2_alpha_movement.csv \
+  --summary-output outputs/part2_alpha_movement_summary.csv
 ```
 
 The trajectory CSV includes 3D CTF sensor centroids, projected 2D centroids,

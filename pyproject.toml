@@ -35,8 +35,17 @@ pymegdec-stimulus-decoding = "pymegdec.deprecated_entrypoints:stimulus_decoding"
 pymegdec-stimulus-cross-subject-cue-calibrated = "pymegdec.deprecated_entrypoints:stimulus_cross_subject_cue_calibrated"
 pymegdec-stimulus-cross-subject-hyperalignment = "pymegdec.deprecated_entrypoints:stimulus_cross_subject_hyperalignment"
 pymegdec-stimulus-cross-subject-mcca = "pymegdec.deprecated_entrypoints:stimulus_cross_subject_mcca"
+pymegdec-stimulus-cross-person-decode = "pymegdec.stimulus_cross_person:main"
 pymegdec-alpha-movement-results = "pymegdec.deprecated_entrypoints:alpha_movement_results"
 pymegdec-make-synthetic-data = "pymegdec.deprecated_entrypoints:make_synthetic_data"
+pymegdec-migration = "pymegdec.neureptrace_compat:migration_main"
+pymegdec-neureptrace = "pymegdec.neureptrace_compat:neureptrace_main"
+pymegdec-mne-time-decode = "pymegdec.neureptrace_compat:mne_time_decode_main"
+pymegdec-plot-time-decode = "pymegdec.neureptrace_compat:plot_time_decode_main"
+pymegdec-validate-manifest = "pymegdec.neureptrace_compat:validate_manifest_main"
+pymegdec-validate-observations = "pymegdec.neureptrace_compat:validate_observations_main"
+pymegdec-observation-ensemble = "pymegdec.neureptrace_compat:observation_ensemble_main"
+pymegdec-results = "pymegdec.neureptrace_compat:results_main"
 
 [tool.poetry]
 packages = [{ include = "pymegdec", from = "src" }]

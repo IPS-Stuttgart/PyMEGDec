@@ -10,6 +10,7 @@ from typing import Sequence
 
 import numpy as np
 
+from . import neureptrace_compat
 from .alpha_metrics import (
     DEFAULT_FREQUENCY_RANGE,
     DEFAULT_OCCIPITAL_PATTERN,
@@ -349,6 +350,7 @@ def _build_stimulus_decoding_parser(
 def cross_validate(argv: Sequence[str] | None = None, prog: str | None = None) -> int:
     parser = _build_cross_validate_parser(prog=prog)
     args = parser.parse_args(argv)
+    neureptrace_compat.emit_migration_warning("pymegdec cross-validate")
     accuracy = cross_validate_single_dataset(
         args.data_folder,
         args.participant,
@@ -362,6 +364,7 @@ def cross_validate(argv: Sequence[str] | None = None, prog: str | None = None) -
 def transfer(argv: Sequence[str] | None = None, prog: str | None = None) -> int:
     parser = _build_transfer_parser(prog=prog)
     args = parser.parse_args(argv)
+    neureptrace_compat.emit_migration_warning("pymegdec transfer")
     accuracy = evaluate_model_transfer(
         args.data_folder,
         args.participant,
@@ -382,6 +385,7 @@ def _transfer_participants(participant_spec, data_folder):
 def stimulus_decoding(argv: Sequence[str] | None = None, prog: str | None = None) -> int:
     parser = _build_stimulus_decoding_parser(prog=prog)
     args = parser.parse_args(argv)
+    neureptrace_compat.emit_migration_warning("pymegdec stimulus decoding")
     participants = _transfer_participants(args.participants, args.data_folder)
     if not participants:
         parser.error("No participants found. Pass --participants or configure a data " "directory with matching main and cue MAT files.")
@@ -487,6 +491,7 @@ def _build_alpha_movement_results_parser(
 def alpha_movement_results(argv: Sequence[str] | None = None, prog: str | None = None) -> int:
     parser = _build_alpha_movement_results_parser(prog=prog)
     args = parser.parse_args(argv)
+    neureptrace_compat.emit_migration_warning("pymegdec alpha movement-results")
     config = AlphaMovementAnalysisConfig(
         pre_window=args.pre_window,
         post_window=args.post_window,

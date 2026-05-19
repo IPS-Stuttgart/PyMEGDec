@@ -17,7 +17,12 @@ from neureptrace.decoding.classifiers import (
     CorrelationPrototypeClassifier,
     DecodedLabelClassifier,
     ShrinkagePrototypeClassifier,
+    _build_gaussian_naive_bayes as _build_gaussian_naive_bayes,
     _build_pytorch_data_loaders,
+    _build_regularized_qda as _build_regularized_qda,
+    _build_shrinkage_prototype as _build_shrinkage_prototype,
+    _build_weighted_multinomial_logistic as _build_weighted_multinomial_logistic,
+    _normalize_shrinkage_prototype_param as _normalize_shrinkage_prototype_param,
     encode_classifier_labels,
     get_default_classifier_param,
     positive_class_score,
@@ -34,9 +39,17 @@ from neureptrace.decoding.classifiers import (
 _DecodedLabelClassifier = DecodedLabelClassifier
 _encode_classifier_labels = encode_classifier_labels
 
+PYMEGDEC_DEFAULT_CLASSIFIER_PARAMS = {
+    "gaussian-naive-bayes": DEFAULT_CLASSIFIER_PARAMS["gaussian-naive-bayes"],
+    "multinomial-logistic-weighted": DEFAULT_CLASSIFIER_PARAMS["multinomial-logistic-weighted"],
+    "regularized-qda": DEFAULT_CLASSIFIER_PARAMS["regularized-qda"],
+    "shrinkage-prototype": DEFAULT_CLASSIFIER_PARAMS["shrinkage-prototype"],
+}
+
 __all__ = [
     "CLASSIFIER_REGISTRY",
     "DEFAULT_CLASSIFIER_PARAMS",
+    "PYMEGDEC_DEFAULT_CLASSIFIER_PARAMS",
     "ClassifierSpec",
     "CorrelationPrototypeClassifier",
     "DecodedLabelClassifier",
