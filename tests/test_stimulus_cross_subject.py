@@ -451,14 +451,33 @@ class TestStimulusCrossSubject(unittest.TestCase):
         self.assertEqual(len(artifacts["outer"]), 4)
         self.assertEqual({row["classifier"] for row in artifacts["outer"]}, {"nested_topk_score_ensemble"})
         self.assertEqual({row["selection_ensemble_size"] for row in artifacts["selected"]}, {2})
+        self.assertEqual({row["selection_ensemble_weighting"] for row in artifacts["selected"]}, {"uniform"})
         self.assertTrue(all(";" in row["selected_candidate_indices"] for row in artifacts["selected"]))
+        self.assertTrue(all(row["selected_ensemble_weights"] in {"1:0.5;2:0.5", "2:0.5;1:0.5"} for row in artifacts["selected"]))
         self.assertTrue(all(row["ensemble_score_normalization"] == "row_z_softmax" for row in artifacts["outer"]))
         self.assertEqual({row["balanced_accuracy"] for row in artifacts["outer"]}, {1.0})
         self.assertEqual(artifacts["group_summary"][0]["outer_evaluation_mode"], "topk_score_ensemble")
         self.assertEqual(artifacts["group_summary"][0]["selection_ensemble_size"], 2)
+        self.assertEqual(artifacts["group_summary"][0]["selection_ensemble_weighting"], "uniform")
         self.assertIn("1:", artifacts["group_summary"][0]["selected_ensemble_candidate_counts"])
         self.assertIn("2:", artifacts["group_summary"][0]["selected_ensemble_candidate_counts"])
         self.assertEqual(fit_model.call_count, 20)
+
+    def test_nested_ensemble_weights_can_follow_inner_validation_scores(self):
+        rows = [
+            {"selected_inner_balanced_accuracy_mean": 0.70},
+            {"selected_inner_balanced_accuracy_mean": 0.66},
+            {"selected_inner_balanced_accuracy_mean": 0.62},
+        ]
+
+        uniform = cross_subject._nested_ensemble_weights(rows, weighting="uniform", temperature=0.02)  # pylint: disable=protected-access
+        weighted = cross_subject._nested_ensemble_weights(rows, weighting="inner_softmax", temperature=0.02)  # pylint: disable=protected-access
+
+        np.testing.assert_allclose(uniform, np.asarray([1 / 3, 1 / 3, 1 / 3]))
+        self.assertAlmostEqual(float(np.sum(weighted)), 1.0)
+        self.assertGreater(weighted[0], weighted[1])
+        self.assertGreater(weighted[1], weighted[2])
+        self.assertGreater(weighted[0], 0.80)
 
     def test_nested_cross_subject_can_evaluate_outer_subset(self):
         data_by_participant = {

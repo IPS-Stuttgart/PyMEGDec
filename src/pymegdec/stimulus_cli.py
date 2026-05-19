@@ -40,9 +40,12 @@ from pymegdec.stimulus_cross_subject import (
     DEFAULT_CROSS_SUBJECT_TRIAL_SELECTION_SEED,
     DEFAULT_CROSS_SUBJECT_PARTICIPANTS,
     DEFAULT_CROSS_SUBJECT_SELECTION_ENSEMBLE_SIZE,
+    DEFAULT_CROSS_SUBJECT_SELECTION_ENSEMBLE_TEMPERATURE,
+    DEFAULT_CROSS_SUBJECT_SELECTION_ENSEMBLE_WEIGHTING,
     DEFAULT_CROSS_SUBJECT_WINDOW_CENTER,
     DEFAULT_CROSS_SUBJECT_WINDOW_SIZE,
     NORMALIZATION_MODES,
+    SELECTION_ENSEMBLE_WEIGHTING_MODES,
     CrossSubjectStimulusConfig,
     TRIAL_SELECTION_MODES,
     export_cross_subject_stimulus_smoke,
@@ -586,6 +589,18 @@ def _build_cross_subject_nested_parser(prog: str | None = None) -> argparse.Argu
         default=DEFAULT_CROSS_SUBJECT_SELECTION_ENSEMBLE_SIZE,
         help="Evaluate a row-z-softmax score ensemble over the top K inner-LOSO candidates instead of only the single winner.",
     )
+    parser.add_argument(
+        "--selection-ensemble-weighting",
+        choices=SELECTION_ENSEMBLE_WEIGHTING_MODES,
+        default=DEFAULT_CROSS_SUBJECT_SELECTION_ENSEMBLE_WEIGHTING,
+        help="Weighting scheme for --selection-ensemble-size values greater than one.",
+    )
+    parser.add_argument(
+        "--selection-ensemble-temperature",
+        type=float,
+        default=DEFAULT_CROSS_SUBJECT_SELECTION_ENSEMBLE_TEMPERATURE,
+        help="Softmax temperature for --selection-ensemble-weighting inner_softmax.",
+    )
     parser.add_argument("--chance-classes", type=int, default=DEFAULT_CROSS_SUBJECT_CHANCE_CLASSES, help="Number of stimulus classes used for chance level.")
     parser.add_argument("--random-state", type=int, default=0, help="Random state passed to classifiers.")
     parser.add_argument(
@@ -651,6 +666,8 @@ def stimulus_cross_subject_nested(argv: Sequence[str] | None = None, prog: str |
         write_incremental=args.write_incremental,
         outer_participants=outer_participants,
         selection_ensemble_size=args.selection_ensemble_size,
+        selection_ensemble_weighting=args.selection_ensemble_weighting,
+        selection_ensemble_temperature=args.selection_ensemble_temperature,
         progress=lambda message: print(message, flush=True),
         label_shuffle_control=args.label_shuffle_control,
         label_shuffle_seed=args.label_shuffle_seed,

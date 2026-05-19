@@ -48,6 +48,9 @@ DEFAULT_CROSS_SUBJECT_COMPONENTS_PCA = 64
 DEFAULT_CROSS_SUBJECT_NESTED_WINDOW_CENTERS = (0.150, 0.175, 0.200)
 DEFAULT_CROSS_SUBJECT_SELECTION_METRIC = "balanced_accuracy"
 DEFAULT_CROSS_SUBJECT_SELECTION_ENSEMBLE_SIZE = 1
+DEFAULT_CROSS_SUBJECT_SELECTION_ENSEMBLE_WEIGHTING = "uniform"
+DEFAULT_CROSS_SUBJECT_SELECTION_ENSEMBLE_TEMPERATURE = 0.02
+SELECTION_ENSEMBLE_WEIGHTING_MODES = ("uniform", "inner_softmax")
 NESTED_SCORE_ENSEMBLE_CLASSIFIER = "nested_topk_score_ensemble"
 NESTED_SCORE_ENSEMBLE_NORMALIZATION = "row_z_softmax"
 FEATURE_MODES = ("sensor_mean", "sensor_flat")
@@ -173,6 +176,8 @@ def evaluate_nested_cross_subject_stimulus(
     candidate_configs,
     outer_participants=None,
     selection_ensemble_size=DEFAULT_CROSS_SUBJECT_SELECTION_ENSEMBLE_SIZE,
+    selection_ensemble_weighting=DEFAULT_CROSS_SUBJECT_SELECTION_ENSEMBLE_WEIGHTING,
+    selection_ensemble_temperature=DEFAULT_CROSS_SUBJECT_SELECTION_ENSEMBLE_TEMPERATURE,
     progress=None,
     existing_artifacts=None,
     after_outer_fold=None,
@@ -190,6 +195,8 @@ def evaluate_nested_cross_subject_stimulus(
         raise ValueError("At least one candidate configuration is required.")
     outer_participants = _normalize_outer_participants(participants, outer_participants)
     selection_ensemble_size = _normalize_selection_ensemble_size(selection_ensemble_size)
+    selection_ensemble_weighting = _normalize_selection_ensemble_weighting(selection_ensemble_weighting)
+    selection_ensemble_temperature = _normalize_selection_ensemble_temperature(selection_ensemble_temperature)
 
     resumed = _existing_nested_artifact_rows(existing_artifacts)
     inner_rows = resumed["inner_validation"]
@@ -212,6 +219,8 @@ def evaluate_nested_cross_subject_stimulus(
             feature_cache,
             inner_pair_cache,
             selection_ensemble_size=selection_ensemble_size,
+            selection_ensemble_weighting=selection_ensemble_weighting,
+            selection_ensemble_temperature=selection_ensemble_temperature,
             progress=progress,
             label_shuffle_control=label_shuffle_control,
             label_shuffle_seed=label_shuffle_seed,
@@ -421,6 +430,16 @@ def summarize_nested_cross_subject_stimulus(outer_rows, *, signflip_permutations
     label_shuffle_seed = _single_row_value(outer_rows, "label_shuffle_seed", default="")
     outer_evaluation_mode = _single_row_value(outer_rows, "outer_evaluation_mode", default="single_best")
     selection_ensemble_size = _single_row_value(outer_rows, "selection_ensemble_size", default=DEFAULT_CROSS_SUBJECT_SELECTION_ENSEMBLE_SIZE)
+    selection_ensemble_weighting = _single_row_value(
+        outer_rows,
+        "selection_ensemble_weighting",
+        default=DEFAULT_CROSS_SUBJECT_SELECTION_ENSEMBLE_WEIGHTING,
+    )
+    selection_ensemble_temperature = _single_row_value(
+        outer_rows,
+        "selection_ensemble_temperature",
+        default=DEFAULT_CROSS_SUBJECT_SELECTION_ENSEMBLE_TEMPERATURE,
+    )
     ensemble_candidate_counts = _row_semicolon_value_counts(outer_rows, "selected_candidate_indices")
     return [
         {
@@ -430,6 +449,8 @@ def summarize_nested_cross_subject_stimulus(outer_rows, *, signflip_permutations
             "selection_metric": DEFAULT_CROSS_SUBJECT_SELECTION_METRIC,
             "outer_evaluation_mode": outer_evaluation_mode,
             "selection_ensemble_size": selection_ensemble_size,
+            "selection_ensemble_weighting": selection_ensemble_weighting,
+            "selection_ensemble_temperature": selection_ensemble_temperature,
             "label_shuffle_control": label_shuffle_control,
             "label_shuffle_seed": label_shuffle_seed,
             "n_candidates": int(max(int(row["n_candidates"]) for row in outer_rows)),
@@ -770,6 +791,8 @@ def export_nested_cross_subject_stimulus(  # pylint: disable=too-many-arguments
     write_incremental=False,
     outer_participants=None,
     selection_ensemble_size=DEFAULT_CROSS_SUBJECT_SELECTION_ENSEMBLE_SIZE,
+    selection_ensemble_weighting=DEFAULT_CROSS_SUBJECT_SELECTION_ENSEMBLE_WEIGHTING,
+    selection_ensemble_temperature=DEFAULT_CROSS_SUBJECT_SELECTION_ENSEMBLE_TEMPERATURE,
     progress=None,
     label_shuffle_control=False,
     label_shuffle_seed=0,
@@ -809,6 +832,8 @@ def export_nested_cross_subject_stimulus(  # pylint: disable=too-many-arguments
         existing_artifacts=existing_artifacts,
         after_outer_fold=write_outputs if write_incremental else None,
         selection_ensemble_size=selection_ensemble_size,
+        selection_ensemble_weighting=selection_ensemble_weighting,
+        selection_ensemble_temperature=selection_ensemble_temperature,
         label_shuffle_control=label_shuffle_control,
         label_shuffle_seed=label_shuffle_seed,
     )
@@ -843,6 +868,8 @@ def _evaluate_nested_outer_fold(
     inner_pair_cache,
     *,
     selection_ensemble_size=DEFAULT_CROSS_SUBJECT_SELECTION_ENSEMBLE_SIZE,
+    selection_ensemble_weighting=DEFAULT_CROSS_SUBJECT_SELECTION_ENSEMBLE_WEIGHTING,
+    selection_ensemble_temperature=DEFAULT_CROSS_SUBJECT_SELECTION_ENSEMBLE_TEMPERATURE,
     progress=None,
     label_shuffle_control=False,
     label_shuffle_seed=0,
@@ -863,6 +890,8 @@ def _evaluate_nested_outer_fold(
     selected_row, selected_candidate_rows = _select_nested_candidate_ensemble(
         outer_inner_rows,
         selection_ensemble_size=selection_ensemble_size,
+        selection_ensemble_weighting=selection_ensemble_weighting,
+        selection_ensemble_temperature=selection_ensemble_temperature,
         candidate_configs=candidate_configs,
     )
     if int(selected_row["selection_ensemble_size"]) == 1:
@@ -904,6 +933,13 @@ def _evaluate_nested_outer_fold(
             test_sets,
             selected_configs,
             selected_candidate_rows,
+            ensemble_weights=_nested_ensemble_weights(
+                selected_candidate_rows,
+                weighting=selected_row["selection_ensemble_weighting"],
+                temperature=selected_row["selection_ensemble_temperature"],
+            ),
+            ensemble_weighting=selected_row["selection_ensemble_weighting"],
+            ensemble_temperature=selected_row["selection_ensemble_temperature"],
             include_predictions=True,
         )
     _add_selected_candidate_fields(outer_row, selected_row)
@@ -914,6 +950,7 @@ def _evaluate_nested_outer_fold(
             "DONE outer_test_participant="
             f"{test_participant} selected_candidate={selected_row['selected_candidate_index']} "
             f"selection_ensemble_size={selected_row['selection_ensemble_size']} "
+            f"selection_ensemble_weighting={selected_row['selection_ensemble_weighting']} "
             f"inner_mean={selected_row['selected_inner_balanced_accuracy_mean']:.4f} "
             f"outer_balanced_accuracy={outer_row['balanced_accuracy']:.4f}"
         )
@@ -1151,20 +1188,30 @@ def _select_nested_candidate(inner_rows):
     return _rank_nested_candidates(inner_rows)[0]
 
 
-def _select_nested_candidate_ensemble(inner_rows, *, selection_ensemble_size, candidate_configs):
+def _select_nested_candidate_ensemble(
+    inner_rows,
+    *,
+    selection_ensemble_size,
+    selection_ensemble_weighting,
+    selection_ensemble_temperature,
+    candidate_configs,
+):
     ranked = _rank_nested_candidates(inner_rows)
     requested_size = _normalize_selection_ensemble_size(selection_ensemble_size)
+    weighting = _normalize_selection_ensemble_weighting(selection_ensemble_weighting)
+    temperature = _normalize_selection_ensemble_temperature(selection_ensemble_temperature)
     selected_rows = tuple(ranked[: min(requested_size, len(ranked))])
+    weights = _nested_ensemble_weights(selected_rows, weighting=weighting, temperature=temperature)
     selected = dict(selected_rows[0])
     selected["selection_ensemble_requested_size"] = int(requested_size)
     selected["selection_ensemble_size"] = int(len(selected_rows))
+    selected["selection_ensemble_weighting"] = weighting
+    selected["selection_ensemble_temperature"] = float(temperature)
     selected["selected_candidate_indices"] = _format_sequence(row["selected_candidate_index"] for row in selected_rows)
     selected["selected_ensemble_inner_balanced_accuracy_means"] = _format_float_mapping(
         (row["selected_candidate_index"], row["selected_inner_balanced_accuracy_mean"]) for row in selected_rows
     )
-    selected["selected_ensemble_weights"] = _format_float_mapping(
-        (row["selected_candidate_index"], 1.0 / len(selected_rows)) for row in selected_rows
-    )
+    selected["selected_ensemble_weights"] = _format_float_mapping((row["selected_candidate_index"], weight) for row, weight in zip(selected_rows, weights))
     selected_configs = tuple(candidate_configs[int(row["selected_candidate_index"]) - 1] for row in selected_rows)
     selected["selected_ensemble_classifier_counts"] = _format_counter(Counter(config.classifier for config in selected_configs))
     selected["selected_ensemble_window_center_counts"] = _format_counter(Counter(float(config.window_center) for config in selected_configs))
@@ -1173,6 +1220,30 @@ def _select_nested_candidate_ensemble(inner_rows, *, selection_ensemble_size, ca
     selected["selected_ensemble_alignment_counts"] = _format_counter(Counter(config.alignment for config in selected_configs))
     selected["selected_ensemble_components_pca_counts"] = _format_counter(Counter(str(config.components_pca) for config in selected_configs))
     return selected, selected_rows
+
+
+def _nested_ensemble_weights(
+    selected_rows,
+    *,
+    weighting=DEFAULT_CROSS_SUBJECT_SELECTION_ENSEMBLE_WEIGHTING,
+    temperature=DEFAULT_CROSS_SUBJECT_SELECTION_ENSEMBLE_TEMPERATURE,
+):
+    selected_rows = tuple(selected_rows)
+    if not selected_rows:
+        raise ValueError("At least one selected candidate row is required for ensemble weighting.")
+    weighting = _normalize_selection_ensemble_weighting(weighting)
+    temperature = _normalize_selection_ensemble_temperature(temperature)
+    if weighting == "uniform" or len(selected_rows) == 1:
+        return np.full(len(selected_rows), 1.0 / len(selected_rows), dtype=float)
+    scores = np.asarray([float(row["selected_inner_balanced_accuracy_mean"]) for row in selected_rows], dtype=float)
+    if not np.all(np.isfinite(scores)):
+        return np.full(len(selected_rows), 1.0 / len(selected_rows), dtype=float)
+    logits = (scores - np.max(scores)) / float(temperature)
+    weights = np.exp(np.clip(logits, -50.0, 50.0))
+    weight_sum = float(np.sum(weights))
+    if weight_sum <= 0.0 or not np.isfinite(weight_sum):
+        return np.full(len(selected_rows), 1.0 / len(selected_rows), dtype=float)
+    return weights / weight_sum
 
 
 def _rank_nested_candidates(inner_rows):
@@ -1239,6 +1310,8 @@ def _rank_nested_candidates(inner_rows):
         row["selected_inner_winner_margin"] = winner_margin if rank == 1 else selected_mean - float(row["selected_inner_balanced_accuracy_mean"])
         row["selection_ensemble_requested_size"] = DEFAULT_CROSS_SUBJECT_SELECTION_ENSEMBLE_SIZE
         row["selection_ensemble_size"] = DEFAULT_CROSS_SUBJECT_SELECTION_ENSEMBLE_SIZE
+        row["selection_ensemble_weighting"] = DEFAULT_CROSS_SUBJECT_SELECTION_ENSEMBLE_WEIGHTING
+        row["selection_ensemble_temperature"] = DEFAULT_CROSS_SUBJECT_SELECTION_ENSEMBLE_TEMPERATURE
         row["selected_candidate_indices"] = str(row["selected_candidate_index"])
         row["selected_ensemble_inner_balanced_accuracy_means"] = _format_float_mapping(
             ((row["selected_candidate_index"], row["selected_inner_balanced_accuracy_mean"]),)
@@ -1404,7 +1477,17 @@ def _score_outer_fold_model(fitted_model, test_set, config, *, include_predictio
     return outer_row, prediction_rows
 
 
-def _score_outer_fold_ensemble_models(fitted_models, test_sets, configs, selected_rows, *, include_predictions=True):
+def _score_outer_fold_ensemble_models(
+    fitted_models,
+    test_sets,
+    configs,
+    selected_rows,
+    *,
+    ensemble_weights=None,
+    ensemble_weighting=DEFAULT_CROSS_SUBJECT_SELECTION_ENSEMBLE_WEIGHTING,
+    ensemble_temperature=DEFAULT_CROSS_SUBJECT_SELECTION_ENSEMBLE_TEMPERATURE,
+    include_predictions=True,
+):
     fitted_models = tuple(fitted_models)
     test_sets = tuple(test_sets)
     configs = tuple(configs)
@@ -1415,7 +1498,7 @@ def _score_outer_fold_ensemble_models(fitted_models, test_sets, configs, selecte
         raise ValueError("Ensemble fitted models, test sets, configs, and selected rows must have the same length.")
 
     reference_test_set, test_labels, class_order = _validate_ensemble_test_sets(test_sets, configs)
-    weights = np.full(len(fitted_models), 1.0 / len(fitted_models), dtype=float)
+    weights = _normalized_ensemble_weights(ensemble_weights, len(fitted_models))
     probability_matrices = []
     actual_components = []
     for fitted_model, test_set, config in zip(fitted_models, test_sets, configs):
@@ -1454,6 +1537,8 @@ def _score_outer_fold_ensemble_models(fitted_models, test_sets, configs, selecte
         configs,
         weights=weights,
         actual_components=actual_components,
+        ensemble_weighting=ensemble_weighting,
+        ensemble_temperature=ensemble_temperature,
     )
 
     prediction_rows = []
@@ -1474,6 +1559,8 @@ def _score_outer_fold_ensemble_models(fitted_models, test_sets, configs, selecte
                 configs,
                 weights=weights,
                 actual_components=actual_components,
+                ensemble_weighting=ensemble_weighting,
+                ensemble_temperature=ensemble_temperature,
             )
     return outer_row, prediction_rows
 
@@ -1541,6 +1628,21 @@ def _align_score_columns(probabilities, score_classes, class_order):
     return aligned
 
 
+def _normalized_ensemble_weights(weights, expected_size):
+    expected_size = int(expected_size)
+    if weights is None:
+        return np.full(expected_size, 1.0 / expected_size, dtype=float)
+    weights = np.asarray(weights, dtype=float).ravel()
+    if weights.shape[0] != expected_size:
+        raise ValueError("Ensemble weights must match the number of fitted models.")
+    if np.any(weights < 0.0) or not np.all(np.isfinite(weights)):
+        raise ValueError("Ensemble weights must be finite and non-negative.")
+    weight_sum = float(np.sum(weights))
+    if weight_sum <= 0.0:
+        raise ValueError("At least one ensemble weight must be positive.")
+    return weights / weight_sum
+
+
 def _feature_set_trial_indices(feature_set):
     trial_indices = getattr(feature_set, "trial_indices", None)
     if trial_indices is None:
@@ -1548,10 +1650,21 @@ def _feature_set_trial_indices(feature_set):
     return np.asarray(trial_indices, dtype=int).ravel()
 
 
-def _add_ensemble_output_fields(row, selected_rows, configs, *, weights, actual_components):
+def _add_ensemble_output_fields(
+    row,
+    selected_rows,
+    configs,
+    *,
+    weights,
+    actual_components,
+    ensemble_weighting,
+    ensemble_temperature,
+):
     candidate_indices = tuple(int(selected_row["selected_candidate_index"]) for selected_row in selected_rows)
     row["outer_evaluation_mode"] = "topk_score_ensemble"
     row["selection_ensemble_size"] = int(len(candidate_indices))
+    row["selection_ensemble_weighting"] = _normalize_selection_ensemble_weighting(ensemble_weighting)
+    row["selection_ensemble_temperature"] = float(_normalize_selection_ensemble_temperature(ensemble_temperature))
     row["ensemble_score_normalization"] = NESTED_SCORE_ENSEMBLE_NORMALIZATION
     row["ensemble_candidate_indices"] = _format_sequence(candidate_indices)
     row["ensemble_weights"] = _format_float_mapping(zip(candidate_indices, weights))
@@ -2099,6 +2212,20 @@ def _normalize_selection_ensemble_size(value):
     value = int(value)
     if value <= 0:
         raise ValueError("selection_ensemble_size must be positive.")
+    return value
+
+
+def _normalize_selection_ensemble_weighting(value):
+    normalized = str(value).strip().lower().replace("-", "_")
+    if normalized not in SELECTION_ENSEMBLE_WEIGHTING_MODES:
+        raise ValueError(f"selection_ensemble_weighting must be one of {SELECTION_ENSEMBLE_WEIGHTING_MODES}.")
+    return normalized
+
+
+def _normalize_selection_ensemble_temperature(value):
+    value = float(value)
+    if value <= 0.0 or not np.isfinite(value):
+        raise ValueError("selection_ensemble_temperature must be a positive finite value.")
     return value
 
 
