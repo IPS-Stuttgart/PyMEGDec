@@ -5,10 +5,19 @@ loads participant MATLAB files, prepares MEG windows, runs model-transfer and
 cross-validation workflows, and exports stimulus analysis tables.
 
 Generic decoding summaries and reusable prediction-table diagnostics belong in
-[NeuRepTrace](https://github.com/IPS-Stuttgart/NeuRepTrace). PyMEGDec keeps the
-project-specific data conventions, preprocessing defaults, CTF sensor-geometry
-handling, and paper-facing scripts until those pieces have either moved or been
-retired.
+[NeuRepTrace](https://github.com/IPS-Stuttgart/NeuRepTrace). PyMEGDec is moving
+toward a compatibility role: dataset file conventions and metadata mappings can
+now be expressed as NeuRepTrace YAML/JSON dataset specs, while highly
+project-specific alpha, CTF geometry, reaction-time, and paper-export scripts
+can remain here until they are generalized.
+
+Write a starter NeuRepTrace dataset spec for the historical `Part*Data.mat` /
+`Part*CueData.mat` convention with:
+
+```bash
+pymegdec data write-neureptrace-spec --out configs/bushmeg.yml
+neureptrace dataset validate configs/bushmeg.yml
+```
 
 The alpha-band, alpha-movement, and alpha/reaction-time workflows are now
 explicitly legacy-only. They remain callable for reproducibility and to regenerate

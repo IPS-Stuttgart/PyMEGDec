@@ -9,6 +9,7 @@ from collections.abc import Callable, Sequence
 from pymegdec import alpha_cli, neureptrace_compat
 from pymegdec import cli as legacy_cli
 from pymegdec import stimulus_cli, stimulus_hyperalignment, stimulus_mcca
+from pymegdec.neureptrace_dataset_spec import write_neureptrace_dataset_spec
 from pymegdec.synthetic_data_cli import make_synthetic_data
 
 CommandHandler = Callable[[Sequence[str] | None, str | None], int]
@@ -57,11 +58,16 @@ def _config_handlers() -> dict[str, CommandHandler]:
     return neureptrace_compat.handlers()
 
 
+def _data_handlers() -> dict[str, CommandHandler]:
+    return {"write-neureptrace-spec": write_neureptrace_dataset_spec}
+
+
 def _top_level_handlers() -> dict[str, CommandHandler]:
     return {
         "cross-validate": legacy_cli.cross_validate,
         "transfer": legacy_cli.transfer,
         "make-synthetic-data": make_synthetic_data,
+        "write-neureptrace-spec": write_neureptrace_dataset_spec,
         # Backward-compatible top-level aliases. Prefer grouped forms in new docs.
         "stimulus-decoding": legacy_cli.stimulus_decoding,
         "stimulus-cross-subject-cue-calibrated": stimulus_cli.stimulus_cross_subject_cue_calibrated,
@@ -95,6 +101,7 @@ def _print_main_help() -> None:
         "decoding|predictions|robustness|temporal-generalization|onset-scan>\n"
         "  pymegdec alpha <metrics|movement|movement-results|reaction-time|rt>  # legacy paper-specific analyses\n"
         "  pymegdec config <validate-manifest|mne-time-decode|plot-time-decode>\n"
+        "  pymegdec data <write-neureptrace-spec>\n"
         "\nCore commands:\n"
         "  pymegdec cross-validate ...\n"
         "  pymegdec transfer ...\n"
@@ -119,6 +126,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _dispatch_group("alpha", "Alpha metric, movement, and reaction-time analyses.", _alpha_handlers(), remaining)
     if command == "config":
         return _dispatch_group("config", "NeuRepTrace-owned configuration workflows.", _config_handlers(), remaining)
+    if command == "data":
+        return _dispatch_group("data", "Data configuration and migration helpers.", _data_handlers(), remaining)
     handlers = _top_level_handlers()
     if command in handlers:
         return handlers[command](remaining, f"pymegdec {command}")
