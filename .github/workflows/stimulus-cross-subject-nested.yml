@@ -4,21 +4,10 @@ name: Manual stimulus cross-subject nested
 on:
   workflow_dispatch:
     inputs:
-      runner_type:
-        description: Runner backend used for the nested benchmark.
-        required: true
-        default: github-hosted
-        type: choice
-        options: [github-hosted, self-hosted]
-      github_runner_label:
-        description: GitHub-hosted runner label used when runner_type=github-hosted.
+      runner_label:
+        description: Runner label used for the nested benchmark.
         required: true
         default: ubuntu-latest
-        type: string
-      self_hosted_runner_label:
-        description: Self-hosted runner label used when runner_type=self-hosted.
-        required: true
-        default: self-hosted
         type: string
       python_version:
         description: Python version used for the analysis environment.
@@ -144,16 +133,6 @@ on:
         required: true
         default: "0"
         type: string
-      stimulus_metadata_path:
-        description: Optional repository path to a stimulus metadata CSV for confusion-category summaries.
-        required: false
-        default: ""
-        type: string
-      confusion_category_columns:
-        description: Optional comma-separated metadata category columns for confusion-category summaries.
-        required: false
-        default: ""
-        type: string
 
 permissions:
   contents: read
@@ -161,7 +140,7 @@ permissions:
 jobs:
   cross-subject-nested:
     name: Cross-subject nested
-    runs-on: ${{ inputs.runner_type == 'github-hosted' && inputs.github_runner_label || inputs.self_hosted_runner_label }}
+    runs-on: ${{ inputs.runner_label }}
     timeout-minutes: 720
     env:
       DATA_DIR: ${{ inputs.data_dir }}
@@ -187,8 +166,8 @@ jobs:
       MAX_TRIALS_PER_CLASS_PER_PARTICIPANT: ${{ inputs.max_trials_per_class_per_participant }}
       LABEL_SHUFFLE_CONTROL: ${{ inputs.label_shuffle_control }}
       LABEL_SHUFFLE_SEED: ${{ inputs.label_shuffle_seed }}
-      STIMULUS_METADATA_PATH: ${{ inputs.stimulus_metadata_path }}
-      CONFUSION_CATEGORY_COLUMNS: ${{ inputs.confusion_category_columns }}
+      STIMULUS_METADATA_PATH: ""
+      CONFUSION_CATEGORY_COLUMNS: ""
       MAIN_FILE_NAMES: >-
         Part1Data.mat,Part2Data.mat,Part3Data.mat,Part4Data.mat,Part6Data.mat,
         Part8Data.mat,Part9Data.mat,Part10Data.mat,Part13Data.mat,Part14Data.mat,
