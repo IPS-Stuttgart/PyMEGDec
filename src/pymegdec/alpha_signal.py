@@ -1,19 +1,20 @@
 """Compatibility helpers for alpha-band signal extraction.
 
 Generic filtering, Hilbert-phase extraction, sampling-rate validation, and
-phase averaging are delegated to NeuRepTrace.  This module keeps only the
-FieldTrip/MATLAB cell-array accessors and PyMEGDec's historical
-``extract_time_basis`` convenience wrapper.
+phase averaging are delegated to NeuRepTrace when its optional signal helpers
+are available. Local fallbacks keep PyMEGDec's historical public API working in
+environments with older NeuRepTrace installations.
 """
 
 from __future__ import annotations
 
 import numpy as np
-from neureptrace.signal.band import (
-    average_phases,
-    extract_phase,
-    sampling_rate_from_time_vector,
-)
+import scipy.signal
+
+try:  # pragma: no cover - exercised only when NeuRepTrace exposes this module.
+    from neureptrace.signal import band as _neureptrace_band
+except ImportError:  # pragma: no cover - normal path for older NeuRepTrace versions.
+    _neureptrace_band = None
 
 
 def get_data_field(data, field_name):
@@ -58,6 +59,56 @@ def get_trial_signal(data, trial_idx=0):
     return np.asarray(trial_signal, dtype=float)
 
 
+def uniform_sample_interval(time_vector):
+    """Return the sample interval after validating a finite regular time axis."""
+
+    time_vector = np.asarray(time_vector, dtype=float).ravel()
+    if time_vector.size < 2:
+        raise ValueError("time_vector must contain at least two samples.")
+    if not np.all(np.isfinite(time_vector)):
+        raise ValueError("time_vector must contain only finite values.")
+
+    diffs = np.diff(time_vector)
+    if np.any(diffs <= 0):
+        raise ValueError("time_vector must be strictly increasing.")
+
+    sample_interval = float(np.median(diffs))
+    if not np.allclose(diffs, sample_interval, rtol=1e-6, atol=1e-12):
+        raise ValueError("time_vector must be uniformly sampled.")
+    return sample_interval
+
+
+def sampling_rate_from_time_vector(time_vector):
+    """Return sampling rate in Hz after validating ``time_vector``."""
+
+    if _neureptrace_band is not None:
+        sampling_rate = getattr(_neureptrace_band, "sampling_rate_from_time_vector", None)
+        if sampling_rate is not None:
+            return float(sampling_rate(time_vector))
+    return float(1.0 / uniform_sample_interval(time_vector))
+
+
+def _validated_sampling_rate(sampling_rate):
+    try:
+        sampling_rate = float(sampling_rate)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("sampling_rate must be a positive finite value.") from exc
+    if not np.isfinite(sampling_rate) or sampling_rate <= 0.0:
+        raise ValueError("sampling_rate must be a positive finite value.")
+    return sampling_rate
+
+
+def _validated_signal_values(signal_values):
+    signal_values = np.asarray(signal_values, dtype=float)
+    if signal_values.ndim == 0:
+        raise ValueError("signal_values must have at least one sample dimension.")
+    if signal_values.shape[-1] < 2:
+        raise ValueError("signal_values must contain at least two samples along the last axis.")
+    if not np.all(np.isfinite(signal_values)):
+        raise ValueError("signal_values must contain only finite values.")
+    return signal_values
+
+
 def _validated_trial_signal(data, trial_idx, time_vector):
     signal = get_trial_signal(data, trial_idx)
     if signal.ndim != 2:
@@ -96,13 +147,75 @@ def _channel_indices_from_range(channel_range, n_channels):
     return range(start, stop + 1)
 
 
+def bandpass_filter_signal(signal_values, sampling_rate, lowcut=8.0, highcut=12.0, order=5):
+    signal_values = _validated_signal_values(signal_values)
+    sampling_rate = _validated_sampling_rate(sampling_rate)
+    nyquist = 0.5 * sampling_rate
+    if lowcut <= 0 or highcut <= 0:
+        raise ValueError("Cutoff frequencies must be positive.")
+    if lowcut >= highcut:
+        raise ValueError("lowcut must be lower than highcut.")
+    if highcut >= nyquist:
+        raise ValueError("highcut must be lower than the Nyquist frequency.")
+
+    sos = scipy.signal.butter(
+        order,
+        [lowcut, highcut],
+        btype="bandpass",
+        fs=sampling_rate,
+        output="sos",
+    )
+    return scipy.signal.sosfiltfilt(sos, signal_values)
+
+
+def extract_alpha_signal_and_phase(signal_values, sampling_rate, lowcut=8.0, highcut=12.0):
+    """Return the alpha-band signal and Hilbert phase using PyMEGDec defaults."""
+
+    filtered_signal = bandpass_filter_signal(signal_values, sampling_rate, lowcut, highcut)
+    analytic_signal = scipy.signal.hilbert(filtered_signal)
+    return filtered_signal, np.angle(analytic_signal)
+
+
+def extract_phase(signal_values, sampling_rate, lowcut=8.0, highcut=12.0):
+    """
+    Extracts the phase of the given signal using bandpass filtering and
+    Hilbert transform.
+    """
+
+    if _neureptrace_band is not None:
+        phase_extractor = getattr(_neureptrace_band, "extract_phase", None)
+        if phase_extractor is not None:
+            return phase_extractor(signal_values, sampling_rate, lowcut=lowcut, highcut=highcut)
+
+    _, phase = extract_alpha_signal_and_phase(signal_values, sampling_rate, lowcut, highcut)
+    return phase
+
+
+def average_phases(phases):
+    """
+    Averages the phases across multiple channels.
+    """
+
+    if not phases:
+        raise ValueError("At least one phase array is required.")
+
+    if _neureptrace_band is not None:
+        phase_averager = getattr(_neureptrace_band, "average_phases", None)
+        if phase_averager is not None:
+            return phase_averager(phases)
+
+    phase_matrix = np.vstack(phases)
+    mean_phase = np.angle(np.mean(np.exp(1j * phase_matrix), axis=0))
+    return mean_phase
+
+
 def extract_time_basis(data, trial_idx=0, channel_range=(187, 198)):
     """
     Extract a robust alpha-phase time basis across multiple channels.
 
-    Generic alpha filtering and Hilbert phase extraction are implemented in
-    :mod:`neureptrace.signal.band`; this wrapper keeps PyMEGDec's historical
-    FieldTrip/MATLAB trial and channel-range conventions.
+    Generic alpha filtering and Hilbert phase extraction are delegated to
+    :mod:`neureptrace.signal.band` when available; local fallbacks keep
+    PyMEGDec's historical FieldTrip/MATLAB trial and channel-range conventions.
     """
 
     time_vector = get_time_vector(data, trial_idx)
