@@ -9,7 +9,7 @@ from pathlib import Path
 
 import numpy as np
 import scipy.io as sio
-import scipy.signal
+from neureptrace.features.oscillatory import compute_band_analytic_window, summarize_analytic_window
 from pymegdec.alpha_signal import get_data_field, get_time_vector, get_trial_signal
 from pymegdec.data_config import resolve_data_folder
 from scipy.spatial import Delaunay  # pylint: disable=no-name-in-module
@@ -503,24 +503,19 @@ def _resolve_channel_indices(data, channel_indices, config):
 
 
 def compute_alpha_analytic_window(signal, time_vector, config):
-    """Return alpha-band analytic signal samples in ``config.time_window``."""
+    """Return alpha-band analytic signal samples in ``config.time_window``.
 
-    signal, time_vector, sample_interval = _validate_alpha_signal_time_axis(signal, time_vector)
-    sampling_rate = float(1 / sample_interval)
-    time_indices = np.flatnonzero(_time_mask(time_vector, config.time_window))
-    low_freq, high_freq = config.frequency_range
+    The generic band-pass/Hilbert implementation lives in NeuRepTrace; this
+    wrapper preserves PyMEGDec's ``AlphaMetricConfig`` interface.
+    """
 
-    sos = scipy.signal.butter(
-        config.filter_order,
-        [low_freq, high_freq],
-        btype="bandpass",
-        fs=sampling_rate,
-        output="sos",
+    return compute_band_analytic_window(
+        signal,
+        time_vector,
+        band_hz=config.frequency_range,
+        time_window=config.time_window,
+        filter_order=config.filter_order,
     )
-    alpha_signal = scipy.signal.sosfiltfilt(sos, signal, axis=-1)
-    analytic_signal = scipy.signal.hilbert(alpha_signal, axis=-1)
-    alpha_window = np.take(analytic_signal, time_indices, axis=-1)
-    return alpha_window, time_indices
 
 
 def _alpha_window_and_phase(signal, time_vector, config):
@@ -557,6 +552,10 @@ def compute_alpha_trial_metrics(
     alpha_window, phase = _alpha_window_and_phase(signal, time_vector, config)
     edge_indices, edge_vectors, edge_pinv = _phase_geometry(data, channel_indices, config)
 
+    alpha_features = summarize_analytic_window(
+        alpha_window,
+        outputs=("mean_power", "log_power", "phase_concentration"),
+    )
     row = {
         "participant": participant_id if participant_id is not None else "",
         "dataset": dataset,
@@ -567,9 +566,9 @@ def compute_alpha_trial_metrics(
         "low_freq": config.frequency_range[0],
         "high_freq": config.frequency_range[1],
         "n_channels": int(len(channel_indices)),
-        "alpha_power": float(np.mean(np.abs(alpha_window) ** 2)),
-        "log_alpha_power": float(np.mean(np.log(np.abs(alpha_window) ** 2 + 1e-12))),
-        "phase_concentration": float(np.abs(np.mean(np.exp(1j * phase)))),
+        "alpha_power": alpha_features["mean_power"],
+        "log_alpha_power": alpha_features["log_power"],
+        "phase_concentration": alpha_features["phase_concentration"],
     }
     row.update(
         _phase_gradient_metrics(
